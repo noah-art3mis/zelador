@@ -16,8 +16,9 @@ Orientation (mandatory, in order):
 
 Then triage each arrival with the user. For every new item propose, from the audit findings and the item itself:
 
-- **Workflow state** – `status:to-read` unless the user says otherwise (`status:` is exclusive – never propose a second).
-- **Topics** – `topic:` tags drawn from the registry; a genuinely new subject is a taxonomy conversation (add the canonical to `taxonomy.yaml` with the user, subtopic + broad tag alongside), not an excuse for an unregistered tag.
+- **Workflow state** – nothing, by default. Never sprinkle `status:to-read` (or any other `status:`) onto arrivals just because they are new; the user sets workflow state deliberately, and a blanket to-read pass makes the tag meaningless. Propose one only when the user asks for it in that session (`status:` is exclusive – never propose a second).
+- **Topics** – `topic:` tags drawn from the registry; a genuinely new subject is a taxonomy conversation (add the canonical to `taxonomy.yaml` with the user, subtopic + broad tag alongside), not an excuse for an unregistered tag. Topics carry the whole subject judgement – see collections below.
+- **Collections** – only three are still filed into: **Projects ▸ CAPTA ▸ Public Opinion**, **Courses**, and **Projects ▸ Software** (keys from `zel collections`). Everything else in the tree is legacy, kept for the items already in it and closed to arrivals – the M5 conversion moved subject grouping to the `topic:` registry, and filing a new item under the old subject hierarchy re-creates the duplication that conversion removed. A subject with no registered canonical is a taxonomy conversation, never a new collection.
 - **Metadata gaps** – completeness findings filled via `uv run zel lookup crossref KEY` (or `arxiv`); `uv run zel lookup fulltext KEY` when the PDF itself must be read. Candidates are proposals like any other – never auto-accepted.
 - **Duplicates** – a `--since` duplicate finding means the arrival collides with an existing item; surface it and let the user pick which to keep (trash the other, never delete).
 
