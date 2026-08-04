@@ -16,8 +16,9 @@ Orientation (mandatory, in order):
 
 Then triage each arrival with the user. For every new item propose, from the audit findings and the item itself:
 
-- **Workflow state** – `status:` tags are assigned manually by the user only. Never propose or apply `status:to-read` (or any `status:` tag) yourself; at most, point out arrivals that lack one.
-- **Topics** – `topic:` tags drawn from the registry; a genuinely new subject is a taxonomy conversation (add the canonical to `taxonomy.yaml` with the user, subtopic + broad tag alongside), not an excuse for an unregistered tag.
+- **Workflow state** – nothing, ever. `status:` tags are assigned manually by the user only; never propose or apply `status:to-read` (or any other `status:`) yourself – a blanket to-read pass makes the tag meaningless. At most, point out arrivals that lack one.
+- **Topics** – `topic:` tags drawn from the registry; a genuinely new subject is a taxonomy conversation (add the canonical to `taxonomy.yaml` with the user, subtopic + broad tag alongside), not an excuse for an unregistered tag. Topics carry the whole subject judgement – see collections below.
+- **Collections** – only three are still filed into: **Projects ▸ CAPTA ▸ Public Opinion**, **Courses**, and **Projects ▸ Software** (keys from `zel collections`). Everything else in the tree is legacy, kept for the items already in it and closed to arrivals – the M5 conversion moved subject grouping to the `topic:` registry, and filing a new item under the old subject hierarchy re-creates the duplication that conversion removed. A subject with no registered canonical is a taxonomy conversation, never a new collection.
 - **Metadata gaps** – completeness findings filled via `uv run zel lookup crossref KEY` (or `arxiv`); `uv run zel lookup fulltext KEY` when the PDF itself must be read. Candidates are proposals like any other – never auto-accepted.
 - **Duplicates** – a `--since` duplicate finding means the arrival collides with an existing item; surface it and let the user pick which to keep (trash the other, never delete).
 

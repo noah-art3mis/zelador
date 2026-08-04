@@ -16,6 +16,8 @@ Orientation (mandatory, in order):
 
 Then work the findings with the user, in passes: interpret the audit into a short list of themes (case-duplicate tags, alias fold-ins, untriaged items, stray collections) and agree which to tackle this session before authoring anything.
 
+The tagging conventions in the `zelador-intake` skill – no default `status:` tag, and the short list of collections still open to new items – bind here too whenever a pass proposes tags or filing.
+
 For each agreed theme:
 
 - **Author** a changeset in `<data dir>/changesets/<slug>.json` – `schema: changeset.v1`, a slug naming the theme, and intents drawn only from the op vocabulary in `zelador/write/contracts.py` (`OPS`). One intent group per user-facing decision; keep unrelated themes in separate changesets so a rejection never drags down approved work.
