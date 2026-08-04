@@ -16,7 +16,7 @@ Orientation (mandatory, in order):
 
 Then triage each arrival with the user. For every new item propose, from the audit findings and the item itself:
 
-- **Workflow state** – `status:to-read` unless the user says otherwise (`status:` is exclusive – never propose a second).
+- **Workflow state** – `status:` tags are assigned manually by the user only. Never propose or apply `status:to-read` (or any `status:` tag) yourself; at most, point out arrivals that lack one.
 - **Topics** – `topic:` tags drawn from the registry; a genuinely new subject is a taxonomy conversation (add the canonical to `taxonomy.yaml` with the user, subtopic + broad tag alongside), not an excuse for an unregistered tag.
 - **Metadata gaps** – completeness findings filled via `uv run zel lookup crossref KEY` (or `arxiv`); `uv run zel lookup fulltext KEY` when the PDF itself must be read. Candidates are proposals like any other – never auto-accepted.
 - **Duplicates** – a `--since` duplicate finding means the arrival collides with an existing item; surface it and let the user pick which to keep (trash the other, never delete).
