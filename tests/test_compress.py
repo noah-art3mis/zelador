@@ -1,4 +1,4 @@
-"""The deterministic core of `zel compress`: selection, verdicts, contract, swap preconditions."""
+"""The deterministic core of `zel compress`: selection, verdicts, contract, move preconditions."""
 
 from __future__ import annotations
 
@@ -7,35 +7,36 @@ from datetime import UTC, datetime
 import pytest
 
 from zelador.compress import (
-    CONTRACT,
     Candidate,
     CompressError,
     Entry,
     Facts,
     Report,
     accepted,
+    allocate_run_id,
     report_from_dict,
     report_to_dict,
-    run_id,
+    restore_blockers,
     select_candidates,
     swap_blockers,
     verdict,
 )
 
 
-def facts(size, pages=10, text_len=1000):
-    return Facts(bytes=size, pages=pages, text_len=text_len)
+def facts(size, pages=10, text_len=1000, annots=0):
+    return Facts(bytes=size, pages=pages, text_len=text_len, annots=annots)
 
 
-def entry(key="AAA", ok=True, size=1000, md5="abc"):
+def entry(key="AAA", ok=True, size=1000, original="orig-md5", staged="staged-md5", name=None):
     return Entry(
         key=key,
-        filename=f"{key}.pdf",
+        filename=name or f"{key}.pdf",
         accepted=ok,
         reason="saved 50.0%",
         before=facts(size),
         after=facts(size // 2),
-        md5=md5,
+        original_md5=original,
+        staged_md5=staged,
     )
 
 
@@ -68,6 +69,15 @@ class TestSelectCandidates:
         files = [Candidate(key="SHOUT", filename="SCAN.PDF", bytes=9000)]
         assert [c.key for c in select_candidates(files, min_bytes=0, limit=None)] == ["SHOUT"]
 
+    def test_two_files_under_one_key_are_two_candidates(self):
+        """A storage folder can hold more than one payload — the key is not an identity."""
+        files = [
+            Candidate(key="AAA", filename="b.pdf", bytes=200),
+            Candidate(key="AAA", filename="a.pdf", bytes=200),
+        ]
+        picked = select_candidates(files, min_bytes=0, limit=None)
+        assert [c.id for c in picked] == [("AAA", "a.pdf"), ("AAA", "b.pdf")]
+
 
 class TestVerdict:
     def test_accepts_a_real_saving(self):
@@ -80,8 +90,21 @@ class TestVerdict:
         )
         assert not ok and "613 -> 612" in reason
 
+    def test_rejects_lost_annotations(self):
+        """Embedded highlights live in the file; a compressor that flattens them
+        produces a smaller, same-paged, same-texted file that has eaten the markup."""
+        ok, reason = verdict(
+            facts(1000, annots=132), facts(200, annots=0), min_saving=0.25, text_tolerance=0.02
+        )
+        assert not ok and "annotations lost: 132 -> 0" in reason
+
+    def test_gained_annotations_are_not_a_rejection(self):
+        ok, _ = verdict(
+            facts(1000, annots=3), facts(200, annots=4), min_saving=0.25, text_tolerance=0.02
+        )
+        assert ok
+
     def test_rejects_a_collapsed_text_layer(self):
-        """A 99% saving that ate the text layer is a corrupted file, not a win."""
         ok, reason = verdict(
             facts(1000, text_len=50000),
             facts(10, text_len=12),
@@ -125,9 +148,6 @@ class TestContract:
         restored = report_from_dict(report_to_dict(original))
         assert restored == original
 
-    def test_serialized_form_is_stamped(self):
-        assert report_to_dict(report())["contract"] == CONTRACT
-
     def test_foreign_contract_is_refused(self):
         raw = report_to_dict(report())
         raw["contract"] = "compress.v99"
@@ -141,31 +161,95 @@ class TestContract:
 
 class TestSwapBlockers:
     def test_clean_run_has_none(self):
-        rep = report([entry(key="AAA", md5="abc")])
-        assert swap_blockers(rep, {"AAA": "abc"}, {"AAA": True}) == []
+        entries = [entry()]
+        ids = {("AAA", "AAA.pdf")}
+        assert (
+            swap_blockers(
+                entries,
+                dict.fromkeys(ids, "orig-md5"),
+                dict.fromkeys(ids, "staged-md5"),
+            )
+            == []
+        )
 
     def test_storage_file_changed_since_scan(self):
         """Someone re-annotated the PDF after the scan — the staged copy is stale."""
-        rep = report([entry(key="AAA", md5="abc")])
-        blockers = swap_blockers(rep, {"AAA": "different"}, {"AAA": True})
-        assert len(blockers) == 1 and "AAA" in blockers[0] and "changed" in blockers[0]
+        blockers = swap_blockers(
+            [entry()], {("AAA", "AAA.pdf"): "different"}, {("AAA", "AAA.pdf"): "staged-md5"}
+        )
+        assert len(blockers) == 1 and "changed" in blockers[0]
 
     def test_missing_storage_file(self):
-        rep = report([entry(key="AAA", md5="abc")])
-        blockers = swap_blockers(rep, {}, {"AAA": True})
-        assert len(blockers) == 1 and "AAA" in blockers[0]
+        blockers = swap_blockers([entry()], {}, {("AAA", "AAA.pdf"): "staged-md5"})
+        assert len(blockers) == 1 and "no such file" in blockers[0]
 
     def test_missing_staged_file(self):
-        rep = report([entry(key="AAA", md5="abc")])
-        blockers = swap_blockers(rep, {"AAA": "abc"}, {"AAA": False})
-        assert len(blockers) == 1 and "staged" in blockers[0]
+        blockers = swap_blockers([entry()], {("AAA", "AAA.pdf"): "orig-md5"}, {})
+        assert len(blockers) == 1 and "missing" in blockers[0]
 
-    def test_rejected_entries_are_not_blockers(self):
-        """A rejected candidate is never swapped, so its md5 drifting is irrelevant."""
-        rep = report([entry(key="NO", ok=False, md5="abc")])
-        assert swap_blockers(rep, {"NO": "moved-on"}, {"NO": False}) == []
+    def test_half_written_staged_file_is_refused(self):
+        """It exists, so presence proves nothing — only its content does."""
+        blockers = swap_blockers(
+            [entry()], {("AAA", "AAA.pdf"): "orig-md5"}, {("AAA", "AAA.pdf"): "truncated"}
+        )
+        assert len(blockers) == 1 and "damaged" in blockers[0]
+
+    def test_entries_are_identified_by_key_and_filename(self):
+        """Two PDFs in one storage folder must not shadow each other's hashes."""
+        entries = [entry(key="AAA", name="a.pdf"), entry(key="AAA", name="b.pdf")]
+        storage = {("AAA", "a.pdf"): "orig-md5", ("AAA", "b.pdf"): "orig-md5"}
+        staged = {("AAA", "a.pdf"): "staged-md5", ("AAA", "b.pdf"): "staged-md5"}
+        assert swap_blockers(entries, storage, staged) == []
 
 
-class TestRunId:
+class TestRestoreBlockers:
+    def test_clean_swap_can_be_restored(self):
+        ids = {("AAA", "AAA.pdf")}
+        assert (
+            restore_blockers(
+                [entry()], dict.fromkeys(ids, "staged-md5"), dict.fromkeys(ids, "orig-md5")
+            )
+            == []
+        )
+
+    def test_partial_quarantine_file_is_refused(self):
+        """A move interrupted mid-copy leaves a real file holding partial bytes;
+        restoring it would overwrite an intact library file with a fragment."""
+        blockers = restore_blockers(
+            [entry()], {("AAA", "AAA.pdf"): "staged-md5"}, {("AAA", "AAA.pdf"): "half"}
+        )
+        assert len(blockers) == 1 and "damaged" in blockers[0]
+
+    def test_missing_storage_file_is_not_a_blocker(self):
+        """A swap that died between its two moves — restoring is the repair."""
+        assert restore_blockers([entry()], {}, {("AAA", "AAA.pdf"): "orig-md5"}) == []
+
+    def test_another_run_swapped_it_since(self):
+        """Restoring now would install this run's original over a later run's work,
+        and hand that later run's compressed file back as if it were an original."""
+        blockers = restore_blockers(
+            [entry()],
+            {("AAA", "AAA.pdf"): "some-other-runs-compressed-file"},
+            {("AAA", "AAA.pdf"): "orig-md5"},
+        )
+        assert len(blockers) == 1 and "another run" in blockers[0]
+
+    def test_nothing_quarantined(self):
+        blockers = restore_blockers([entry()], {("AAA", "AAA.pdf"): "staged-md5"}, {})
+        assert len(blockers) == 1 and "no quarantined original" in blockers[0]
+
+
+class TestAllocateRunId:
     def test_is_a_sortable_utc_stamp(self):
-        assert run_id(datetime(2026, 8, 7, 10, 15, 0, tzinfo=UTC)) == "20260807T101500Z-compress"
+        assert (
+            allocate_run_id(datetime(2026, 8, 7, 10, 15, 0, tzinfo=UTC), set())
+            == "20260807T101500Z-compress"
+        )
+
+    def test_second_run_in_the_same_second_gets_its_own_directory(self):
+        """Sharing one would let the second report orphan the first run's originals."""
+        now = datetime(2026, 8, 7, 10, 15, 0, tzinfo=UTC)
+        taken = {"20260807T101500Z-compress"}
+        assert allocate_run_id(now, taken) == "20260807T101500Z-compress-2"
+        taken.add("20260807T101500Z-compress-2")
+        assert allocate_run_id(now, taken) == "20260807T101500Z-compress-3"

@@ -16,7 +16,7 @@ CONFIG_FILE = REPO_ROOT / "config.yaml"
 TAXONOMY_FILE = REPO_ROOT / "taxonomy.yaml"
 WINDOWS_USERS_ROOT = Path("/mnt/c/Users")
 
-DATA_SUBDIRS = ("backups", "audit", "changesets", "plans", "cache", "log")
+DATA_SUBDIRS = ("backups", "audit", "changesets", "plans", "cache", "log", "compress")
 
 
 class ConfigError(Exception):

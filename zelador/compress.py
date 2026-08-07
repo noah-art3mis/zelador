@@ -1,4 +1,4 @@
-"""The deterministic core of `zel compress`: what to try, what to accept, what may be swapped.
+"""The deterministic core of `zel compress`: what to try, what to accept, what may be moved.
 
 Nothing here touches the filesystem or spawns Ghostscript — the shell in
 `zelador.compress_files` does that and hands the facts back as data. The split
@@ -6,6 +6,13 @@ matters more than usual here: this is the only command whose writes land on file
 bytes rather than the Web API, so `zel undo` can never reverse it, and the rules
 that decide whether a compressed file is safe to install have to be testable
 without producing one.
+
+Every move is gated on content, never on a file merely being present. A scan
+records the md5 of both the original and the compressed candidate; swap and
+restore each refuse unless the bytes they are about to move and the bytes they
+are about to displace are the ones those hashes describe. A half-copied file, a
+file another run already replaced, and a file edited since the scan are all the
+same class of problem, and one rule catches all three.
 """
 
 from __future__ import annotations
@@ -17,6 +24,8 @@ from zelador.output import render_table
 
 CONTRACT = "compress.v1"
 
+EntryId = tuple[str, str]
+
 
 class CompressError(Exception):
     """Malformed run report or an impossible request — always fails loudly."""
@@ -24,11 +33,12 @@ class CompressError(Exception):
 
 @dataclass(frozen=True)
 class Facts:
-    """What a PDF is, reduced to the three things a verdict depends on."""
+    """What a PDF is, reduced to the four things a verdict depends on."""
 
     bytes: int
     pages: int
     text_len: int
+    annots: int = 0
 
 
 @dataclass(frozen=True)
@@ -36,6 +46,10 @@ class Candidate:
     key: str
     filename: str
     bytes: int
+
+    @property
+    def id(self) -> EntryId:
+        return (self.key, self.filename)
 
 
 @dataclass(frozen=True)
@@ -46,7 +60,17 @@ class Entry:
     reason: str
     before: Facts
     after: Facts
-    md5: str  # of the storage file as scan found it — the swap-time precondition
+    original_md5: str  # the storage file as the scan found it
+    staged_md5: str = ""  # the compressed candidate; empty when rejected
+
+    @property
+    def id(self) -> EntryId:
+        """A storage folder may hold more than one file, so the key alone is not an identity."""
+        return (self.key, self.filename)
+
+    @property
+    def label(self) -> str:
+        return f"{self.key}/{self.filename}"
 
 
 @dataclass(frozen=True)
@@ -58,17 +82,27 @@ class Report:
     entries: list[Entry]
 
 
-def run_id(now: datetime) -> str:
-    """Run ids sort chronologically and read as plan ids do: <UTC stamp>-<slug>."""
-    return f"{now.strftime('%Y%m%dT%H%M%SZ')}-compress"
+def allocate_run_id(now: datetime, existing: set[str]) -> str:
+    """A run id nobody is using yet.
+
+    Plan ids get uniqueness from their changeset slug; every compress run has the
+    same slug, so two scans in the same second would otherwise share a directory
+    and the second report would orphan the first run's originals.
+    """
+    base = f"{now.strftime('%Y%m%dT%H%M%SZ')}-compress"
+    if base not in existing:
+        return base
+    for suffix in range(2, 1000):
+        candidate = f"{base}-{suffix}"
+        if candidate not in existing:
+            return candidate
+    raise CompressError(f"cannot allocate a run id: {base} and 998 suffixes are all taken")
 
 
-def select_candidates(
-    files: list[Candidate], min_bytes: int, limit: int | None
-) -> list[Candidate]:
+def select_candidates(files: list[Candidate], min_bytes: int, limit: int | None) -> list[Candidate]:
     """PDFs above the floor, heaviest first — compression only pays on the big ones."""
     pdfs = [c for c in files if c.filename.lower().endswith(".pdf") and c.bytes >= min_bytes]
-    pdfs.sort(key=lambda c: (-c.bytes, c.key))
+    pdfs.sort(key=lambda c: (-c.bytes, c.key, c.filename))
     return pdfs[:limit] if limit is not None else pdfs
 
 
@@ -85,12 +119,16 @@ def verdict(
     """Accept the compressed file, or say which rule it broke.
 
     Checks run most-alarming first, so a file that both lost a page and barely
-    shrank reports the lost page — that is the finding worth reading.
+    shrank reports the lost page — that is the finding worth reading. Annotations
+    rank with pages: a library's embedded highlights live in the file itself, and
+    a compressor that silently flattened them would look like a clean win here.
     """
     if before.bytes <= 0:
         return False, "empty file"
     if before.pages != after.pages:
         return False, f"pages changed: {before.pages} -> {after.pages}"
+    if after.annots < before.annots:
+        return False, f"annotations lost: {before.annots} -> {after.annots}"
     floor = before.text_len * (1 - text_tolerance)
     if before.text_len > 0 and after.text_len < floor:
         return False, f"text layer shrank: {before.text_len} -> {after.text_len} chars"
@@ -105,22 +143,55 @@ def accepted(report: Report) -> list[Entry]:
 
 
 def swap_blockers(
-    report: Report, current_md5s: dict[str, str], staged_present: dict[str, bool]
+    entries: list[Entry], storage_md5s: dict[EntryId, str], staged_md5s: dict[EntryId, str]
 ) -> list[str]:
-    """Reasons this run must not be installed. Empty means every accepted entry is safe.
+    """Reasons these entries must not be installed. Empty means every one is safe.
 
-    Only accepted entries are ever swapped, so drift under a rejected candidate
-    is none of this command's business.
+    Both sides are checked by content: the original because the staged copy was
+    built from it, and the staged copy because a move that died halfway leaves a
+    file that exists and is wrong.
     """
     blockers = []
-    for e in accepted(report):
-        current = current_md5s.get(e.key)
-        if current is None:
-            blockers.append(f"{e.key}: no file at {e.filename} in storage any more")
-        elif current != e.md5:
-            blockers.append(f"{e.key}: storage file changed since the scan — re-scan first")
-        if not staged_present.get(e.key):
-            blockers.append(f"{e.key}: staged file is missing from the run directory")
+    for entry in entries:
+        storage = storage_md5s.get(entry.id)
+        if storage is None:
+            blockers.append(f"{entry.label}: no such file in storage any more")
+        elif storage != entry.original_md5:
+            blockers.append(f"{entry.label}: storage file changed since the scan — re-scan first")
+        staged = staged_md5s.get(entry.id)
+        if staged is None:
+            blockers.append(f"{entry.label}: staged file is missing from the run directory")
+        elif staged != entry.staged_md5:
+            blockers.append(f"{entry.label}: staged file is damaged or incomplete — re-scan first")
+    return blockers
+
+
+def restore_blockers(
+    entries: list[Entry], storage_md5s: dict[EntryId, str], quarantine_md5s: dict[EntryId, str]
+) -> list[str]:
+    """Reasons these originals must not be moved back.
+
+    A missing storage file is *not* a blocker: that is what a swap interrupted
+    between its two moves leaves behind, and putting the original back is exactly
+    the repair. A storage file holding something other than what this run
+    installed is a blocker — another run has been through here since.
+    """
+    blockers = []
+    for entry in entries:
+        quarantined = quarantine_md5s.get(entry.id)
+        if quarantined is None:
+            blockers.append(f"{entry.label}: no quarantined original to restore")
+        elif quarantined != entry.original_md5:
+            blockers.append(
+                f"{entry.label}: quarantined original is damaged or incomplete — "
+                "restoring it would overwrite the library with a partial file"
+            )
+        storage = storage_md5s.get(entry.id)
+        if storage is not None and storage != entry.staged_md5:
+            blockers.append(
+                f"{entry.label}: the file in storage is not the one this run installed — "
+                "another run has swapped it since"
+            )
     return blockers
 
 
@@ -154,6 +225,10 @@ def _mb(n: int) -> str:
     return f"{n / 1048576:.1f} MB"
 
 
+def with_entries(report: Report, entries: list[Entry]) -> Report:
+    return replace(report, entries=entries)
+
+
 def report_to_dict(report: Report) -> dict:
     return {
         "contract": CONTRACT,
@@ -167,7 +242,8 @@ def report_to_dict(report: Report) -> dict:
                 "filename": e.filename,
                 "accepted": e.accepted,
                 "reason": e.reason,
-                "md5": e.md5,
+                "original_md5": e.original_md5,
+                "staged_md5": e.staged_md5,
                 "before": _facts_to_dict(e.before),
                 "after": _facts_to_dict(e.after),
             }
@@ -192,7 +268,8 @@ def report_from_dict(raw: dict) -> Report:
                     filename=e["filename"],
                     accepted=e["accepted"],
                     reason=e["reason"],
-                    md5=e["md5"],
+                    original_md5=e["original_md5"],
+                    staged_md5=e.get("staged_md5", ""),
                     before=_facts_from_dict(e["before"]),
                     after=_facts_from_dict(e["after"]),
                 )
@@ -203,13 +280,14 @@ def report_from_dict(raw: dict) -> Report:
         raise CompressError(f"malformed {CONTRACT} report: {exc}") from None
 
 
-def with_entries(report: Report, entries: list[Entry]) -> Report:
-    return replace(report, entries=entries)
-
-
 def _facts_to_dict(f: Facts) -> dict:
-    return {"bytes": f.bytes, "pages": f.pages, "text_len": f.text_len}
+    return {"bytes": f.bytes, "pages": f.pages, "text_len": f.text_len, "annots": f.annots}
 
 
 def _facts_from_dict(raw: dict) -> Facts:
-    return Facts(bytes=raw["bytes"], pages=raw["pages"], text_len=raw["text_len"])
+    return Facts(
+        bytes=raw["bytes"],
+        pages=raw["pages"],
+        text_len=raw["text_len"],
+        annots=raw.get("annots", 0),
+    )

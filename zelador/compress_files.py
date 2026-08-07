@@ -1,10 +1,12 @@
-"""Imperative shell for `zel compress`: Ghostscript, hashes, and the three file moves.
+"""Imperative shell for `zel compress`: Ghostscript, hashes, and the file moves.
 
-The run directory *is* the state. A file present in `originals/` means that key has
-been swapped; nothing else records it, so there is no bookkeeping file to disagree
-with the disk. Swap and restore are inverses that move the same two files between
-`staged/`, `originals/`, and Zotero's storage — a crash between the two moves leaves
-the original in quarantine, which is exactly what restore knows how to undo.
+The run directory holds the state: `staged/<key>/<file>` is a compressed candidate,
+`originals/<key>/<file>` is the untouched original a swap moved out of the way. But
+presence alone is never taken as proof — the report records the md5 of both, and
+`zelador.compress` refuses any move whose bytes do not match. That matters because
+the data dir and Zotero's storage are usually on different filesystems (ext4 and
+DrvFs under WSL), so a "move" is a copy followed by an unlink: interrupt it and a
+real file exists holding partial content.
 """
 
 from __future__ import annotations
@@ -19,12 +21,13 @@ from zelador.compress import (
     Candidate,
     CompressError,
     Entry,
+    EntryId,
     Facts,
     Report,
     accepted,
-    run_id,
     verdict,
 )
+from zelador.pdf import PdfReadError, scan_pages
 
 PRESETS = ("screen", "ebook", "printer", "prepress")
 _HASH_CHUNK = 1 << 20
@@ -43,8 +46,6 @@ def ensure_ghostscript() -> str:
 
 def compress_pdf(src: Path, dst: Path, preset: str) -> None:
     """Rewrite src through Ghostscript's pdfwrite device at the given quality preset."""
-    if preset not in PRESETS:
-        raise CompressError(f"unknown preset {preset!r} — one of {', '.join(PRESETS)}")
     dst.parent.mkdir(parents=True, exist_ok=True)
     result = subprocess.run(
         [
@@ -76,15 +77,16 @@ def md5_of(path: Path) -> str:
 
 
 def pdf_facts(path: Path) -> Facts:
-    """Size, page count and extracted text length — everything a verdict needs."""
-    from pypdf import PdfReader
-
+    """Size, pages, extracted text length and annotation count — all a verdict needs."""
     try:
-        pages = [page.extract_text() or "" for page in PdfReader(path).pages]
-    except Exception as exc:  # pypdf raises a zoo of parse errors
-        raise CompressError(f"pypdf could not read {path.name}: {exc}") from None
+        texts, annots = scan_pages(path)
+    except PdfReadError as exc:
+        raise CompressError(str(exc)) from None
     return Facts(
-        bytes=path.stat().st_size, pages=len(pages), text_len=sum(len(page) for page in pages)
+        bytes=path.stat().st_size,
+        pages=len(texts),
+        text_len=sum(len(text) for text in texts),
+        annots=annots,
     )
 
 
@@ -122,6 +124,12 @@ def quarantine_path(run_dir: Path, key: str, filename: str) -> Path:
     return run_dir / "originals" / key / filename
 
 
+def existing_runs(compress_dir: Path) -> set[str]:
+    if not compress_dir.is_dir():
+        return set()
+    return {path.name for path in compress_dir.iterdir() if path.is_dir()}
+
+
 def perform_scan(
     zotero_dir: Path,
     run_dir: Path,
@@ -135,84 +143,98 @@ def perform_scan(
 ) -> Report:
     """Compress each candidate into the run's staging area and judge the result.
 
-    Rejected output is deleted rather than left staged, so anything still under
-    `staged/` when this returns is installable.
+    A candidate that cannot be read or compressed is recorded as a rejection and
+    the scan continues: one unreadable file must not discard the Ghostscript
+    minutes already spent on every other candidate.
     """
     entries = []
     for candidate in candidates:
-        source = storage_path(zotero_dir, candidate.key, candidate.filename)
-        staged = staged_path(run_dir, candidate.key, candidate.filename)
-        digest = md5_of(source)
-        before = pdf_facts(source)
-        try:
-            compress_pdf(source, staged, preset)
-            after = pdf_facts(staged)
-        except CompressError as exc:
-            _discard(staged)
-            entries.append(
-                Entry(
-                    key=candidate.key,
-                    filename=candidate.filename,
-                    accepted=False,
-                    reason=str(exc),
-                    before=before,
-                    after=before,
-                    md5=digest,
-                )
-            )
-            continue
-        ok, reason = verdict(
-            before, after, min_saving=min_saving, text_tolerance=text_tolerance
-        )
-        if not ok:
-            _discard(staged)
-        entry = Entry(
-            key=candidate.key,
-            filename=candidate.filename,
-            accepted=ok,
-            reason=reason,
-            before=before,
-            after=after,
-            md5=digest,
-        )
+        entry = _scan_one(zotero_dir, run_dir, candidate, preset, min_saving, text_tolerance)
         entries.append(entry)
         if progress:
             progress(entry)
     return Report(
-        run=run_id(now),
+        run=run_dir.name,
         created=now.isoformat(),
         zotero_dir=str(zotero_dir),
-        settings={
-            "preset": preset,
-            "min_saving": min_saving,
-            "text_tolerance": text_tolerance,
-        },
+        settings={"preset": preset, "min_saving": min_saving, "text_tolerance": text_tolerance},
         entries=entries,
     )
 
 
+def _scan_one(
+    zotero_dir: Path,
+    run_dir: Path,
+    candidate: Candidate,
+    preset: str,
+    min_saving: float,
+    text_tolerance: float,
+) -> Entry:
+    source = storage_path(zotero_dir, candidate.key, candidate.filename)
+    staged = staged_path(run_dir, candidate.key, candidate.filename)
+    unknown = Facts(bytes=candidate.bytes, pages=0, text_len=0)
+    digest = ""
+    try:
+        digest = md5_of(source)
+        before = pdf_facts(source)
+        compress_pdf(source, staged, preset)
+        after = pdf_facts(staged)
+    except (CompressError, OSError) as exc:
+        _discard(staged)
+        return Entry(
+            key=candidate.key,
+            filename=candidate.filename,
+            accepted=False,
+            reason=str(exc),
+            before=unknown,
+            after=unknown,
+            original_md5=digest,
+        )
+    ok, reason = verdict(before, after, min_saving=min_saving, text_tolerance=text_tolerance)
+    if not ok:
+        _discard(staged)
+    return Entry(
+        key=candidate.key,
+        filename=candidate.filename,
+        accepted=ok,
+        reason=reason,
+        before=before,
+        after=after,
+        original_md5=digest,
+        staged_md5=md5_of(staged) if ok else "",
+    )
+
+
 def swapped_entries(report: Report, run_dir: Path) -> list[Entry]:
-    """Accepted entries already installed — a quarantined original is the only record."""
+    """Accepted entries whose original has been moved into quarantine.
+
+    Whether that quarantined file is *intact* is a separate question, answered by
+    `restore_blockers` — an entry with a damaged original must still be reported,
+    not quietly skipped.
+    """
     return [e for e in accepted(report) if quarantine_path(run_dir, e.key, e.filename).exists()]
 
 
 def pending_entries(report: Report, run_dir: Path) -> list[Entry]:
     """Accepted entries not yet installed — the complement of the swapped ones."""
-    done = {e.key for e in swapped_entries(report, run_dir)}
-    return [e for e in accepted(report) if e.key not in done]
+    done = {e.id for e in swapped_entries(report, run_dir)}
+    return [e for e in accepted(report) if e.id not in done]
 
 
-def current_md5s(entries: list[Entry], zotero_dir: Path) -> dict[str, str]:
-    live = {}
-    for entry in entries:
-        path = storage_path(zotero_dir, entry.key, entry.filename)
-        if path.exists():
-            live[entry.key] = md5_of(path)
-    return live
+def _md5s(paths: dict[EntryId, Path]) -> dict[EntryId, str]:
+    return {key: md5_of(path) for key, path in paths.items() if path.exists()}
 
 
-def staged_present(entries: list[Entry], run_dir: Path) -> dict[str, bool]:
-    return {e.key: staged_path(run_dir, e.key, e.filename).exists() for e in entries}
+def storage_md5s(entries: list[Entry], zotero_dir: Path) -> dict[EntryId, str]:
+    return _md5s({e.id: storage_path(zotero_dir, e.key, e.filename) for e in entries})
+
+
+def staged_md5s(entries: list[Entry], run_dir: Path) -> dict[EntryId, str]:
+    return _md5s({e.id: staged_path(run_dir, e.key, e.filename) for e in entries})
+
+
+def quarantine_md5s(entries: list[Entry], run_dir: Path) -> dict[EntryId, str]:
+    return _md5s({e.id: quarantine_path(run_dir, e.key, e.filename) for e in entries})
 
 
 def perform_swap(entries: list[Entry], run_dir: Path, zotero_dir: Path) -> list[Entry]:
@@ -221,30 +243,39 @@ def perform_swap(entries: list[Entry], run_dir: Path, zotero_dir: Path) -> list[
     for entry in entries:
         storage = storage_path(zotero_dir, entry.key, entry.filename)
         quarantine = quarantine_path(run_dir, entry.key, entry.filename)
-        staged = staged_path(run_dir, entry.key, entry.filename)
-        quarantine.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(storage), str(quarantine))
-        shutil.move(str(staged), str(storage))
+        _move(storage, quarantine)
+        _move(staged_path(run_dir, entry.key, entry.filename), storage)
         moved.append(entry)
     return moved
 
 
-def perform_restore(report: Report, run_dir: Path, zotero_dir: Path) -> list[Entry]:
+def perform_restore(entries: list[Entry], run_dir: Path, zotero_dir: Path) -> list[Entry]:
     """Exact inverse of swap: the compressed file returns to staging, the original to storage."""
     restored = []
-    for entry in swapped_entries(report, run_dir):
+    for entry in entries:
         quarantine = quarantine_path(run_dir, entry.key, entry.filename)
         storage = storage_path(zotero_dir, entry.key, entry.filename)
-        staged = staged_path(run_dir, entry.key, entry.filename)
         if storage.exists():
-            staged.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(storage), str(staged))
-        storage.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(quarantine), str(storage))
+            _move(storage, staged_path(run_dir, entry.key, entry.filename))
+        _move(quarantine, storage)
         _prune(quarantine.parent)
         restored.append(entry)
     _prune(run_dir / "originals")
     return restored
+
+
+def _move(src: Path, dst: Path) -> None:
+    """Move a file, reporting the failure in this command's own terms.
+
+    `shutil.move` across filesystems copies then unlinks, so an ENOSPC here leaves
+    a partial destination — which is why every mover is content-checked before the
+    next command trusts what it finds.
+    """
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        shutil.move(str(src), str(dst))
+    except OSError as exc:
+        raise CompressError(f"could not move {src.name} to {dst.parent}: {exc}") from None
 
 
 def _discard(path: Path) -> None:
