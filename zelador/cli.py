@@ -10,12 +10,13 @@ from typing import Annotated
 import typer
 
 from zelador import backup as backup_mod
-from zelador import cli_change, cli_lookup, config
+from zelador import cli_change, cli_compress, cli_lookup, config
 from zelador import local as local_mod
 from zelador import status as status_mod
 from zelador import taxonomy as taxonomy_mod
 from zelador.audit import runner as audit_runner
 from zelador.client import ZoteroClient, ZoteroError
+from zelador.compress import CompressError
 from zelador.output import emit_ndjson, note, render_table, strip_html
 
 app = typer.Typer(
@@ -48,7 +49,7 @@ def guard():
     """Operational failures exit 1 with the reason on stderr, never a traceback."""
     try:
         yield
-    except (config.ConfigError, ZoteroError) as exc:
+    except (config.ConfigError, ZoteroError, CompressError) as exc:
         note(f"error: {exc}")
         raise typer.Exit(1) from None
 
@@ -367,7 +368,9 @@ def probe(
         print(json.dumps(make_client().raw(path), indent=2, ensure_ascii=False))
 
 
-# Change-loop commands (validate/apply/undo, debug reconcile/restore) and the
-# lookup command live in their own modules and register onto these apps.
+# Change-loop commands (validate/apply/undo, debug reconcile/restore), the
+# lookup command and the storage commands live in their own modules and
+# register onto these apps.
 cli_change.register(app, debug_app)
 cli_lookup.register(app)
+cli_compress.register(app)

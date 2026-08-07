@@ -127,13 +127,12 @@ def _local_path(zotero_dir: Path | None, attachment: dict) -> str | None:
 
 
 def _extract_pages(pdf_path: Path) -> list[str]:
-    from pypdf import PdfReader
+    from zelador.pdf import PdfReadError, page_texts
 
     try:
-        reader = PdfReader(pdf_path)
-        return [page.extract_text() or "" for page in reader.pages]
-    except Exception as exc:  # pypdf raises a zoo of parse errors
-        raise SourceError(f"pypdf could not read {pdf_path}: {exc}") from None
+        return page_texts(pdf_path)
+    except PdfReadError as exc:
+        raise SourceError(str(exc)) from None
 
 
 def render_page(pdf_path: Path, out_path: Path) -> Path:
