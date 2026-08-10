@@ -278,10 +278,23 @@ class _Expander:
             ok = self._check_adoptable(where, attachment) and ok
         if not ok:
             return
+        # An adopted attachment hands over everything the user said about the file.
+        # Zotero surfaces tags on items and forbids child items in collections, so
+        # anything left on the child is invisible or silently dropped. Adopted tags
+        # skip the registry check on purpose: they already exist in the library, and
+        # the registry governs what may be *proposed*, not what is already assigned.
+        adopted_tags, adopted_colls = [], []
+        if attachment is not None:
+            adata = self.item_state(attachment)
+            adopted_tags = [t["tag"] for t in adata.get("tags", [])]
+            adopted_colls = list(adata.get("collections", []))
+        tags = list(dict.fromkeys([*intent.get("tags", []), *adopted_tags]))
+        colls = list(dict.fromkeys([*intent.get("collections", []), *adopted_colls]))
+
         key = self.keygen()
         new = {"itemType": item_type, **intent["fields"],
-               "tags": [{"tag": t, "type": 0} for t in intent.get("tags", [])],
-               "collections": list(intent.get("collections", []))}
+               "tags": [{"tag": t, "type": 0} for t in tags],
+               "collections": colls}
         if intent.get("creators"):
             new["creators"] = intent["creators"]
         self.emit(group, "create_item", "item", key, 0, "object", None, new, "low")
@@ -290,9 +303,18 @@ class _Expander:
         self.created_keys.add(key)
         if attachment is not None:
             version = self.items_by_key[attachment]["version"]
+            adata = self.item_state(attachment)
             self.emit(group, "create_item", "item", attachment, version,
                       "parentItem", False, key, "low")
-            self.item_state(attachment)["parentItem"] = key
+            adata["parentItem"] = key
+            if adopted_tags:
+                self.emit(group, "create_item", "item", attachment, version,
+                          "tags", adata.get("tags", []), [], "low")
+                adata["tags"] = []
+            if adopted_colls:
+                self.emit(group, "create_item", "item", attachment, version,
+                          "collections", adopted_colls, [], "low")
+                adata["collections"] = []
 
     def _check_create_fields(self, where, item_type, valid, intent) -> bool:
         ok = True

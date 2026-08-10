@@ -414,6 +414,50 @@ class TestCreateItemAdoption:
     def test_missing_attachment_fails(self):
         assert "ATTA1111" in failures_of([self.intent()])
 
+    def facets(self, plan, key):
+        return {op.facet: op for op in plan.operations if op.key == key}
+
+    def test_the_attachments_tags_move_to_the_new_parent(self):
+        """Zotero surfaces tags on items, so a tag left on a child is invisible —
+        the user's hand-set rating:fav simply disappears from where they look."""
+        att = self.standalone(tags=[{"tag": "rating:fav"}, {"tag": "status:read"}])
+        plan = run_expand([self.intent()], items=[att])
+        created = self.facets(plan, "NEWC0001")["object"].new
+        assert [t["tag"] for t in created["tags"]] == ["rating:fav", "status:read"]
+        cleared = self.facets(plan, "ATTA1111")["tags"]
+        assert [t["tag"] for t in cleared.old] == ["rating:fav", "status:read"]
+        assert cleared.new == []
+
+    def test_declared_and_adopted_tags_union_without_duplicates(self):
+        att = self.standalone(tags=[{"tag": "status:read"}, {"tag": "rating:fav"}])
+        intent = {**self.intent(), "tags": ["topic:ai", "status:read"]}
+        plan = run_expand([intent], items=[att])
+        created = self.facets(plan, "NEWC0001")["object"].new
+        assert [t["tag"] for t in created["tags"]] == ["topic:ai", "status:read", "rating:fav"]
+
+    def test_an_unregistered_tag_on_the_attachment_does_not_block_adoption(self):
+        """The registry governs what the agent may propose, not what the user
+        already assigned — else one legacy tag makes a PDF unadoptable forever."""
+        att = self.standalone(tags=[{"tag": "lido"}])
+        plan = run_expand([self.intent()], items=[att])
+        created = self.facets(plan, "NEWC0001")["object"].new
+        assert [t["tag"] for t in created["tags"]] == ["lido"]
+
+    def test_the_attachments_collections_move_too(self):
+        """Zotero forbids child items in collections, so adoption drops the
+        membership silently unless the parent picks it up."""
+        att = self.standalone(collections=["COLL0001"])
+        plan = run_expand([self.intent()], items=[att],
+                          collections=[make_collection("COLL0001", "Somewhere")])
+        created = self.facets(plan, "NEWC0001")["object"].new
+        assert created["collections"] == ["COLL0001"]
+        cleared = self.facets(plan, "ATTA1111")["collections"]
+        assert cleared.old == ["COLL0001"] and cleared.new == []
+
+    def test_an_attachment_with_neither_only_gets_a_parent(self):
+        plan = run_expand([self.intent()], items=[self.standalone()])
+        assert set(self.facets(plan, "ATTA1111")) == {"parentItem"}
+
     def test_non_attachment_item_refused(self):
         assert "not an attachment" in failures_of(
             [self.intent("AAAA1111")], items=[make_item("AAAA1111")])
