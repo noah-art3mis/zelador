@@ -18,6 +18,7 @@ from zelador.audit import runner as audit_runner
 from zelador.client import ZoteroClient, ZoteroError
 from zelador.compress import CompressError
 from zelador.output import emit_ndjson, note, render_table, strip_html
+from zelador.write.changelog import LogFormatError
 
 app = typer.Typer(
     help="Caretaker for a personal Zotero library. The agent proposes; you approve.",
@@ -49,7 +50,7 @@ def guard():
     """Operational failures exit 1 with the reason on stderr, never a traceback."""
     try:
         yield
-    except (config.ConfigError, ZoteroError, CompressError) as exc:
+    except (config.ConfigError, ZoteroError, CompressError, LogFormatError) as exc:
         note(f"error: {exc}")
         raise typer.Exit(1) from None
 

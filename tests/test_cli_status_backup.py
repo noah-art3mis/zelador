@@ -140,3 +140,17 @@ class TestStatusCommand:
         payload = json.loads(result.stdout.strip().splitlines()[-1])
         assert payload["foreign_logs"] == ["reclaim-20260806T212726Z"]
         assert payload["pending_sessions"] == []
+
+    def test_undo_against_a_foreign_log_fails_as_a_sentence(self, fake, tmp_path):
+        """status now prints these names, so pointing undo at one is the obvious
+        next move — it must say what is wrong, not print a traceback."""
+        log_dir = tmp_path / "data" / "log"
+        log_dir.mkdir(parents=True)
+        (log_dir / "reclaim-20260806T212726Z.jsonl").write_text(
+            '{"kind": "header", "timestamp": "20260806T212726Z", "objects": 47}\n'
+            '{"kind": "target", "key": "AAAA1111", "itemType": "attachment"}\n'
+        )
+        result = runner.invoke(cli.app, ["undo", "reclaim-20260806T212726Z", "--yes"])
+        assert result.exit_code == 1
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+        assert "not a log.v1 session log" in result.output

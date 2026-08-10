@@ -99,7 +99,7 @@ Risk tiers: filling an empty field is low-risk; overwriting a non-empty field, r
 Kept deliberately small: variants of the same operation are flags or subcommand arguments, not new verbs (`zel items <keys>` is the batch read, `--bib` is the bibliography rendering, `fulltext` is a lookup source). Panels are the `rich_help_panel` groups in `--help`.
 
 - **Library**
-  - `zel status` — one-screen session orientation, the skills' mandatory opener: live library version (the command's single API request), last backup's timestamp and version (the intake `--since` marker), item/tag counts from the latest backup, unresolved `pending` session logs, latest audit report and its version, and whether `config.yaml`, `taxonomy.yaml`, and `citekey_sources` are configured; `--json`. If the API request fails it prints the local half plus the error — the one named exception to failing loudly, because "API unreachable" is exactly what a session opener must be able to say.
+  - `zel status` — one-screen session orientation, the skills' mandatory opener: live library version (the command's single API request), last backup's timestamp and version (the intake `--since` marker), item/tag counts from the latest backup, unresolved `pending` session logs, any files in `log/` that are not session logs, latest audit report and its version, and whether `config.yaml`, `taxonomy.yaml`, and `citekey_sources` are configured; `--json`. If the API request fails it prints the local half plus the error — the one named exception to failing loudly, because "API unreachable" is exactly what a session opener must be able to say.
   - `zel items [keys...]` — full paginated dump, or batch read of the given keys; `--since <version>` limits the dump to items added/modified after that library version (Zotero's native `?since=`); `--json` NDJSON; `--bib` (`--style`, APA default) renders bibliography entries server-side (`include=bib`).
   - `zel tags` / `zel collections` — read tag list (with counts and type) / collection tree, `--json`.
   - `zel local <sql>` — read-only analytics: raw agent-authored SQL against a fresh snapshot of Zotero's SQLite. Every run recopies the database with its `-wal`/`-journal` siblings (the desktop writes the live file continuously) and gates on `PRAGMA integrity_check` — a torn copy fails loudly, never answers.
@@ -131,7 +131,12 @@ The repo is public. Personal library data never lives inside the working tree �
   changesets/  proposed changeset JSON files
   plans/       expanded version-pinned plans emitted by `zel validate`
   cache/       lookup response cache (Crossref/arXiv)
-  log/         append-only per-session change logs
+  log/         append-only per-session change logs (log.v1)
+
+Unlike the other subdirectories, `log/` is shared: any one-off script writing an audit trail
+lands its file beside the session logs. So a file there is a session log only if its first line
+is a header declaring `schema: log.v1` — every reader checks that before folding an entry, and
+`zel status` names the files that fail the check rather than skipping them silently.
   compress/    one directory per `zel compress` run: report.json, staged/, originals/
 ```
 

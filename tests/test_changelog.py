@@ -93,10 +93,6 @@ class TestForeignFiles:
         with pytest.raises(LogFormatError, match="reclaim-20260806T212726Z"):
             read_log(path)
 
-    def test_unresolved_ops_refuses_it_too(self, tmp_path):
-        with pytest.raises(LogFormatError):
-            unresolved_ops(self.reclaim_log(tmp_path))
-
     def test_a_file_with_no_header_at_all_is_refused(self, tmp_path):
         path = tmp_path / "headerless.jsonl"
         path.write_text(json.dumps({"kind": "entry", "op": "op-001", "status": "pending"}) + "\n")

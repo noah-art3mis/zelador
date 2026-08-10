@@ -90,29 +90,40 @@ def read_header(path: Path) -> dict:
                 line = json.loads(raw)
             except json.JSONDecodeError as exc:
                 raise LogFormatError(f"{path.name}: first line is not JSON — {exc}") from None
-            if not isinstance(line, dict) or line.get("kind") != "header":
-                raise LogFormatError(f"{path.name}: first line is not a header")
-            schema = line.get("schema")
-            if schema != LOG_SCHEMA:
-                raise LogFormatError(
-                    f"{path.name}: not a {LOG_SCHEMA} session log (schema is {schema!r})"
-                )
-            return line
+            return validate_header(line, path.name)
     raise LogFormatError(f"{path.name}: empty file, no header")
 
 
+def validate_header(line, name: str) -> dict:
+    """The one place the log.v1 header rule lives; both readers go through it."""
+    if not isinstance(line, dict) or line.get("kind") != "header":
+        raise LogFormatError(f"{name}: first line is not a header")
+    schema = line.get("schema")
+    if schema != LOG_SCHEMA:
+        raise LogFormatError(f"{name}: not a {LOG_SCHEMA} session log (schema is {schema!r})")
+    return line
+
+
 def read_log(path: Path) -> tuple[dict, dict[str, LogEntry]]:
-    """Header plus entries folded last-status-wins, in first-pending order."""
-    header: dict = read_header(path)
+    """Header plus entries folded last-status-wins, in first-pending order.
+
+    One pass: the first line is validated as the header, later header lines are
+    skipped rather than adopted, so the header returned is always the one that
+    passed the check.
+    """
+    header: dict | None = None
     entries: dict[str, LogEntry] = {}
     with path.open() as handle:
         for raw in handle:
             if not raw.strip():
                 continue
             line = json.loads(raw)
+            if header is None:
+                header = validate_header(line, path.name)
+                continue
             if line["kind"] == "header":
-                header = line
-            elif line["op"] in entries:
+                continue
+            if line["op"] in entries:
                 entry = entries[line["op"]]
                 entry.status = line["status"]
                 entry.version = line.get("version", entry.version)
@@ -120,6 +131,8 @@ def read_log(path: Path) -> tuple[dict, dict[str, LogEntry]]:
                 entries[line["op"]] = LogEntry(
                     operation=line["operation"], status=line["status"], version=line.get("version")
                 )
+    if header is None:
+        raise LogFormatError(f"{path.name}: empty file, no header")
     return header, entries
 
 
