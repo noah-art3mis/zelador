@@ -7,12 +7,21 @@ from pathlib import Path
 
 from zelador import backup
 from zelador.config import CONFIG_FILE, TAXONOMY_FILE, Config
-from zelador.write.changelog import unresolved_ops
+from zelador.write.changelog import is_session_log, unresolved_ops
 
 
 def pending_sessions(log_dir: Path) -> list[str]:
     """Session logs holding unresolved `pending` entries — apply refuses while these exist."""
-    return [path.stem for path in sorted(log_dir.glob("*.jsonl")) if unresolved_ops(path)]
+    return [
+        path.stem
+        for path in sorted(log_dir.glob("*.jsonl"))
+        if is_session_log(path) and unresolved_ops(path)
+    ]
+
+
+def foreign_logs(log_dir: Path) -> list[str]:
+    """Files in log/ that are not session logs — reported rather than silently skipped."""
+    return [path.stem for path in sorted(log_dir.glob("*.jsonl")) if not is_session_log(path)]
 
 
 def latest_audit(audit_dir: Path) -> dict | None:
@@ -51,6 +60,7 @@ def local_status(backups_dir: Path, log_dir: Path, audit_dir: Path, cfg: Config)
     return {
         "backup": backup_part,
         "pending_sessions": pending_sessions(log_dir),
+        "foreign_logs": foreign_logs(log_dir),
         "audit": latest_audit(audit_dir),
         "config": {
             "config_yaml": CONFIG_FILE.exists(),
@@ -89,4 +99,10 @@ def render_status(status: dict) -> list[str]:
         f"taxonomy.yaml {'yes' if cfg['taxonomy_yaml'] else 'no'} · "
         f"citekey_sources {'yes' if cfg['citekey_sources'] else 'no'}"
     )
-    return [library_line, backup_line, audit_line, pending_line, config_line]
+    lines = [library_line, backup_line, audit_line, pending_line, config_line]
+    foreign = status.get("foreign_logs") or []
+    if foreign:
+        lines.append(
+            f"log/:      {len(foreign)} file(s) that are not session logs: {', '.join(foreign)}"
+        )
+    return lines

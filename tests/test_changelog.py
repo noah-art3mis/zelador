@@ -2,7 +2,14 @@
 
 import json
 
-from zelador.write.changelog import SessionLog, read_log, unresolved_ops
+import pytest
+
+from zelador.write.changelog import (
+    LogFormatError,
+    SessionLog,
+    read_log,
+    unresolved_ops,
+)
 
 OP1 = {"id": "op-001", "kind": "item", "key": "AAAA1111", "facet": "tags", "old": [], "new": []}
 OP2 = {"id": "op-002", "kind": "item", "key": "BBBB2222", "facet": "deleted", "old": False,
@@ -60,4 +67,43 @@ class TestFold:
         log = start_log(tmp_path)
         log.pending([OP1, OP2])
         log.resolve("op-002", "failed")
+        assert unresolved_ops(log.path) == ["op-001"]
+
+
+class TestForeignFiles:
+    """A file in log/ that is not a log.v1 session log.
+
+    The one-off reclamation script wrote its audit trail into the same directory
+    with its own shape; `line["op"]` on its first `target` line raised KeyError
+    deep inside the fold, which bricked `zel status` for every later session.
+    """
+
+    def reclaim_log(self, tmp_path):
+        path = tmp_path / "reclaim-20260806T212726Z.jsonl"
+        path.write_text(
+            json.dumps({"kind": "header", "timestamp": "20260806T212726Z", "objects": 47})
+            + "\n"
+            + json.dumps({"kind": "target", "key": "AAAA1111", "itemType": "attachment"})
+            + "\n"
+        )
+        return path
+
+    def test_read_log_refuses_a_foreign_header_by_name(self, tmp_path):
+        path = self.reclaim_log(tmp_path)
+        with pytest.raises(LogFormatError, match="reclaim-20260806T212726Z"):
+            read_log(path)
+
+    def test_unresolved_ops_refuses_it_too(self, tmp_path):
+        with pytest.raises(LogFormatError):
+            unresolved_ops(self.reclaim_log(tmp_path))
+
+    def test_a_file_with_no_header_at_all_is_refused(self, tmp_path):
+        path = tmp_path / "headerless.jsonl"
+        path.write_text(json.dumps({"kind": "entry", "op": "op-001", "status": "pending"}) + "\n")
+        with pytest.raises(LogFormatError):
+            read_log(path)
+
+    def test_a_real_log_still_reads(self, tmp_path):
+        log = start_log(tmp_path)
+        log.pending([OP1])
         assert unresolved_ops(log.path) == ["op-001"]

@@ -110,3 +110,33 @@ class TestStatusCommand:
         )
         result = runner.invoke(cli.app, ["status"])
         assert "20260701T000000Z-done" not in result.output
+
+    def test_a_foreign_file_in_log_does_not_crash_status(self, fake, tmp_path):
+        """The one-off reclamation script wrote its audit trail into log/ with its
+        own shape; status used to die on `line["op"]` before printing anything."""
+        log_dir = tmp_path / "data" / "log"
+        log_dir.mkdir(parents=True)
+        (log_dir / "reclaim-20260806T212726Z.jsonl").write_text(
+            '{"kind": "header", "timestamp": "20260806T212726Z", "objects": 47}\n'
+            '{"kind": "target", "key": "AAAA1111", "itemType": "attachment"}\n'
+        )
+        (log_dir / "20260701T000000Z-merge-tags.jsonl").write_text(
+            '{"kind": "header", "schema": "log.v1", "plan": "20260701T000000Z-merge-tags"}\n'
+            '{"kind": "entry", "op": "op-001", "status": "pending", "operation": {}}\n'
+        )
+        result = runner.invoke(cli.app, ["status"])
+        assert result.exit_code == 0, result.output
+        assert "20260701T000000Z-merge-tags" in result.output
+        assert "reclaim-20260806T212726Z" in result.output
+
+    def test_foreign_files_are_listed_in_the_json_object(self, fake, tmp_path):
+        log_dir = tmp_path / "data" / "log"
+        log_dir.mkdir(parents=True)
+        (log_dir / "reclaim-20260806T212726Z.jsonl").write_text(
+            '{"kind": "header", "timestamp": "20260806T212726Z", "objects": 47}\n'
+        )
+        result = runner.invoke(cli.app, ["status", "--json"])
+        assert result.exit_code == 0
+        payload = json.loads(result.stdout.strip().splitlines()[-1])
+        assert payload["foreign_logs"] == ["reclaim-20260806T212726Z"]
+        assert payload["pending_sessions"] == []

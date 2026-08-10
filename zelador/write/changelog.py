@@ -12,6 +12,12 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+LOG_SCHEMA = "log.v1"
+
+
+class LogFormatError(Exception):
+    """The file is not a session log — refused at the door rather than half-parsed."""
+
 
 @dataclass
 class LogEntry:
@@ -30,7 +36,7 @@ class SessionLog:
         self._append(
             {
                 "kind": "header",
-                "schema": "log.v1",
+                "schema": LOG_SCHEMA,
                 "plan": plan,
                 "backup": backup,
                 "timestamp": timestamp,
@@ -59,9 +65,45 @@ class SessionLog:
             handle.write(json.dumps(line, ensure_ascii=False) + "\n")
 
 
+def is_session_log(path: Path) -> bool:
+    """Whether this file declares itself a log.v1 session log in its first line."""
+    try:
+        read_header(path)
+    except LogFormatError:
+        return False
+    return True
+
+
+def read_header(path: Path) -> dict:
+    """The header line, or a refusal naming the file.
+
+    Other directories in the data dir hold one file per contract, but `log/` is
+    shared — anything writing an audit trail lands beside the session logs. The
+    header declares the schema, so check it before folding a single entry rather
+    than discovering the mismatch as a KeyError on some later line.
+    """
+    with path.open() as handle:
+        for raw in handle:
+            if not raw.strip():
+                continue
+            try:
+                line = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise LogFormatError(f"{path.name}: first line is not JSON — {exc}") from None
+            if not isinstance(line, dict) or line.get("kind") != "header":
+                raise LogFormatError(f"{path.name}: first line is not a header")
+            schema = line.get("schema")
+            if schema != LOG_SCHEMA:
+                raise LogFormatError(
+                    f"{path.name}: not a {LOG_SCHEMA} session log (schema is {schema!r})"
+                )
+            return line
+    raise LogFormatError(f"{path.name}: empty file, no header")
+
+
 def read_log(path: Path) -> tuple[dict, dict[str, LogEntry]]:
     """Header plus entries folded last-status-wins, in first-pending order."""
-    header: dict = {}
+    header: dict = read_header(path)
     entries: dict[str, LogEntry] = {}
     with path.open() as handle:
         for raw in handle:
