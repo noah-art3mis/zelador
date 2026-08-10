@@ -129,12 +129,34 @@ class TestLint:
         with pytest.raises(taxonomy.TaxonomyError, match="shadow"):
             load(tmp_path, bad)
 
-    def test_colour_outside_okabe_ito_rejected(self, tmp_path):
+    def test_a_hand_picked_colour_is_accepted(self, tmp_path):
+        """Zotero is where colours are actually chosen; the registry records them.
+
+        Rejecting anything outside one palette meant a user who had already
+        picked colours by hand could not write them down, and every plan then
+        carried a repaint of their library they never asked for.
+        """
+        good = (
+            "families:\n  status: {coloured: true}\n"
+            "tags:\n  - tag: status:read\n    colour: '#999999'\n"
+        )
+        assert load(tmp_path, good).coloured()[0].colour == "#999999"
+
+    def test_illegible_yellow_rejected(self, tmp_path):
+        """The one colour Zotero renders unreadably as coloured tag text."""
         bad = (
             "families:\n  status: {coloured: true}\n"
-            "tags:\n  - tag: status:read\n    colour: '#FF0000'\n"
+            "tags:\n  - tag: status:read\n    colour: '#F0E442'\n"
         )
-        with pytest.raises(taxonomy.TaxonomyError, match="Okabe-Ito"):
+        with pytest.raises(taxonomy.TaxonomyError, match="illegible"):
+            load(tmp_path, bad)
+
+    def test_malformed_colour_rejected(self, tmp_path):
+        bad = (
+            "families:\n  status: {coloured: true}\n"
+            "tags:\n  - tag: status:read\n    colour: 'reddish'\n"
+        )
+        with pytest.raises(taxonomy.TaxonomyError, match="#RRGGBB"):
             load(tmp_path, bad)
 
     def test_colour_on_uncoloured_family_rejected(self, tmp_path):
@@ -146,9 +168,8 @@ class TestLint:
             load(tmp_path, bad)
 
     def test_more_than_nine_coloured_tags_rejected(self, tmp_path):
-        palette = sorted(taxonomy.OKABE_ITO)
         entries = "".join(
-            f"  - tag: status:s{i}\n    colour: '{palette[i % len(palette)]}'\n" for i in range(10)
+            f"  - tag: status:s{i}\n    colour: '#00{i:02d}FF'\n" for i in range(10)
         )
         bad = f"families:\n  status: {{coloured: true}}\ntags:\n{entries}"
         with pytest.raises(taxonomy.TaxonomyError, match="9"):

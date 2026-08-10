@@ -14,19 +14,17 @@ import yaml
 
 from zelador.config import TAXONOMY_FILE, ConfigError
 
-# Okabe-Ito colourblind-safe palette (jfly.uni-koeln.de/color) — the only
-# colours the registry accepts. Yellow renders illegibly as coloured tag text
-# in Zotero's selector; the example registry leaves it unused by convention.
-OKABE_ITO = {
-    "#000000",  # black
-    "#E69F00",  # orange
-    "#56B4E9",  # sky blue
-    "#009E73",  # bluish green
-    "#F0E442",  # yellow
-    "#0072B2",  # blue
-    "#D55E00",  # vermillion
-    "#CC79A7",  # reddish purple
-}
+# Colours are chosen in Zotero and written down here, so the registry records
+# any `#RRGGBB` rather than dictating a palette — `expand` treats it as
+# authoritative for the whole tagColors array, so a registry that cannot state
+# the user's actual colours makes every plan carry a repaint they never asked
+# for. The Okabe-Ito colourblind-safe palette (jfly.uni-koeln.de/color) remains
+# the recommendation and is what `taxonomy.example.yaml` ships.
+_HEX_COLOUR = re.compile(r"^#[0-9A-Fa-f]{6}$")
+
+# Zotero renders coloured tags as tinted text in its selector, and this one is
+# unreadable there whatever the palette says.
+ILLEGIBLE_COLOURS = {"#F0E442"}  # Okabe-Ito yellow
 COLOURED_CAP = 9  # Zotero pins at most 9 coloured tags
 
 _TAG_NAME = re.compile(r"^[a-z0-9][a-z0-9-]*:[a-z0-9][a-z0-9-]*$")
@@ -148,8 +146,14 @@ def _lint(taxonomy: Taxonomy, path: Path) -> None:
             owner[alias] = t.tag
     coloured = taxonomy.coloured()
     for t in coloured:
-        if t.colour not in OKABE_ITO:
-            raise TaxonomyError(f"{path}: colour {t.colour!r} on {t.tag!r} is not Okabe-Ito")
+        if not _HEX_COLOUR.match(t.colour or ""):
+            raise TaxonomyError(
+                f"{path}: colour {t.colour!r} on {t.tag!r} is not #RRGGBB hex"
+            )
+        if t.colour.upper() in ILLEGIBLE_COLOURS:
+            raise TaxonomyError(
+                f"{path}: colour {t.colour!r} on {t.tag!r} is illegible as coloured tag text"
+            )
         if not taxonomy.families[t.family].coloured:
             raise TaxonomyError(
                 f"{path}: {t.tag!r} has a colour but family {t.family!r} is not coloured"
