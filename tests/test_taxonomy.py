@@ -129,12 +129,29 @@ class TestLint:
         with pytest.raises(taxonomy.TaxonomyError, match="shadow"):
             load(tmp_path, bad)
 
-    def test_colour_outside_okabe_ito_rejected(self, tmp_path):
+    def test_colour_outside_any_recommended_palette_accepted(self, tmp_path):
+        """Palette membership is a recommendation, not a rule — Zotero's own hues pass."""
+        ok = (
+            "families:\n  status: {coloured: true}\n"
+            "tags:\n  - tag: status:to-read\n    colour: '#FF8C19'\n"
+        )
+        tax = load(tmp_path, ok)
+        assert tax.tag_colors_value() == [{"name": "status:to-read", "color": "#FF8C19"}]
+
+    def test_lowercase_hex_colour_accepted(self, tmp_path):
+        ok = (
+            "families:\n  status: {coloured: true}\n"
+            "tags:\n  - tag: status:read\n    colour: '#ff8c19'\n"
+        )
+        assert load(tmp_path, ok).coloured()[0].colour == "#ff8c19"
+
+    @pytest.mark.parametrize("bad_colour", ["blue", "#GGGGGG", "#FFF", "#FF8C19FF", "FF8C19"])
+    def test_malformed_colour_rejected(self, tmp_path, bad_colour):
         bad = (
             "families:\n  status: {coloured: true}\n"
-            "tags:\n  - tag: status:read\n    colour: '#FF0000'\n"
+            f"tags:\n  - tag: status:read\n    colour: '{bad_colour}'\n"
         )
-        with pytest.raises(taxonomy.TaxonomyError, match="Okabe-Ito"):
+        with pytest.raises(taxonomy.TaxonomyError, match="hex colour"):
             load(tmp_path, bad)
 
     def test_colour_on_uncoloured_family_rejected(self, tmp_path):
@@ -146,10 +163,7 @@ class TestLint:
             load(tmp_path, bad)
 
     def test_more_than_nine_coloured_tags_rejected(self, tmp_path):
-        palette = sorted(taxonomy.OKABE_ITO)
-        entries = "".join(
-            f"  - tag: status:s{i}\n    colour: '{palette[i % len(palette)]}'\n" for i in range(10)
-        )
+        entries = "".join(f"  - tag: status:s{i}\n    colour: '#00000{i}'\n" for i in range(10))
         bad = f"families:\n  status: {{coloured: true}}\ntags:\n{entries}"
         with pytest.raises(taxonomy.TaxonomyError, match="9"):
             load(tmp_path, bad)
