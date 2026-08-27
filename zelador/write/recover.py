@@ -20,7 +20,7 @@ from pathlib import Path
 from zelador.client import BATCH_SIZE, ZoteroClient
 from zelador.write.apply import ApplyOutcome, execute_chunk
 from zelador.write.changelog import SessionLog, read_log
-from zelador.write.library_state import facet_value, fetch_objects, setting_value
+from zelador.write.library_state import facet_value, fetch_objects, setting_value, state_equal
 
 
 class RestoreError(Exception):
@@ -66,7 +66,8 @@ def _landed(client, current, op) -> tuple[bool, int | None]:
             and data.get("parentCollection", False) == created["parentCollection"]
         )
         return landed, obj["version"]
-    return facet_value(obj["data"], op["facet"]) == op["new"], obj["version"]
+    facet = op["facet"]
+    return state_equal(facet, facet_value(obj["data"], facet), op["new"]), obj["version"]
 
 
 def run_restore(

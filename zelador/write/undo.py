@@ -20,6 +20,7 @@ from zelador.write.library_state import (
     facet_field,
     facet_value,
     fetch_objects,
+    live_value,
     setting_value,
     state_equal,
 )
@@ -149,11 +150,7 @@ def _reverse_created(key, group, by_facet, data: dict, outcome: UndoOutcome) -> 
             expected[facet_field(facet)] = entry.operation["new"]
     matches = not data.get("deleted")
     for name, value in expected.items():
-        live = data.get(name)
-        if name in ("tags", "collections", "creators"):
-            live = live or []
-        if name in ("parentCollection", "parentItem"):
-            live = data.get(name, False)
+        live = live_value(data, name)
         if live is None and value == "":
             continue  # the server drops fields written as the empty string
         if not state_equal(name, live, value):
