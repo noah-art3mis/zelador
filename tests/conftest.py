@@ -284,9 +284,12 @@ class FakeZotero:
 
     @staticmethod
     def _server_form(data: dict) -> dict:
-        """Zotero stores tags sorted, serializes manual tags without their default
-        type, and drops fields written as the empty string (matches the live API)."""
+        """Zotero stores tags and collections sorted, serializes manual tags without
+        their default type, and drops fields written as the empty string (matches the
+        live API)."""
         data = {k: v for k, v in data.items() if v != ""}
+        if "collections" in data:
+            data["collections"] = sorted(data["collections"])
         if "tags" in data:
             data["tags"] = sorted(
                 (

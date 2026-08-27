@@ -18,7 +18,7 @@ from zelador.client import BATCH_SIZE, ZoteroClient, ZoteroError
 from zelador.status import pending_sessions
 from zelador.write.changelog import SessionLog
 from zelador.write.contracts import Operation, Plan
-from zelador.write.library_state import facet_field, fetch_objects, state_equal
+from zelador.write.library_state import facet_field, fetch_objects, live_value, state_equal
 
 BIG_THRESHOLD = 200  # objects; beyond this apply refuses without --big
 
@@ -183,11 +183,7 @@ def _verify(client, applied_writes: list[tuple[str, dict]], outcome: ApplyOutcom
         for name, value in write.items():
             if name in ("key", "version"):
                 continue
-            live = data.get(name)
-            if name == "deleted":
-                live = bool(live)
-            if name == "tags":
-                live = live or []
+            live = live_value(data, name)
             if live is None and value == "":
                 continue  # the server drops fields written as the empty string
             if not state_equal(name, live, value):
