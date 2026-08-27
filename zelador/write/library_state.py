@@ -32,9 +32,12 @@ def facet_value(data: dict, facet: str):
 
 
 def state_equal(facet: str, a, b) -> bool:
-    """Facet-state equality under the server's serialization: an item's tags
-    are a set — Zotero stores them re-sorted and omits a manual tag's type,
-    so neither order nor an absent type 0 distinguishes two states."""
+    """Facet-state equality under the server's serialization: an item's tags and
+    its collection membership are both sets — Zotero stores them re-sorted and
+    omits a manual tag's type, so neither order nor an absent type 0
+    distinguishes two states."""
+    if facet == "collections":
+        return sorted(a) == sorted(b)
     if facet == "tags":
         return sorted((t["tag"], t.get("type", 0)) for t in a) == sorted(
             (t["tag"], t.get("type", 0)) for t in b
