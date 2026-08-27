@@ -22,7 +22,11 @@ For each agreed theme:
 
 - **Author** a changeset in `<data dir>/changesets/<slug>.json` – `schema: changeset.v1`, a slug naming the theme, and intents drawn only from the op vocabulary in `zelador/write/contracts.py` (`OPS`). One intent group per user-facing decision; keep unrelated themes in separate changesets so a rejection never drags down approved work.
 - **Validate**: `uv run zel validate <changeset> --json`. Fix failures in the changeset, never the plan – plans are version-pinned artifacts, not editable files.
-- **Approve in chat, per intent group**: show each group as the plan expanded it – objects touched, old → new, risk tier – and get an explicit yes/no per group. Any rejection: trim the changeset, re-validate, re-present.
+- **Approve in chat, where the risk actually is.** `expand` already tiers every operation and `zel validate` prints the count per group: `high` is any write that removes or overwrites state the library already holds, `low` is a purely additive one. Read that tier – never re-derive it from the op name, which drifts as `OPS` grows.
+    - **High-risk groups wait for an explicit yes/no each**, before anything is written: show the group as the plan expanded it – objects touched, old → new, 3–5 sample titles. A folded tag, a trashed item, an overwritten field: `zel undo` restores all of these, but only if the user notices in time to want them back.
+    - **Low-risk groups do not wait.** An additive tag from the registry, a collection add, a fill into an empty field – `validate` and the registry have already made every judgement these carry. Apply them and report what landed.
+    - Keep the two tiers in separate changesets so the additive work never sits blocked behind a decision. One blanket yes over both is worse than asking for neither: fifty reversible writes bury the six that are not, and the user learns to wave the batch through.
+    - Any rejection: trim the changeset, re-validate, re-present.
 - **Apply**: `uv run zel apply <plan id> --dry-run` first, always, and show the user what it prints; then `uv run zel apply <plan id>`. Oversized plans refuse without `--big` (threshold in `zel apply --help`) – treat that as a prompt to split, not a flag to reach for.
 - **Confirm**: apply verifies its own writes; relay the outcome and the session id, and remind the user that `uv run zel undo <session> --dry-run` previews the rollback while regret is cheap.
 
