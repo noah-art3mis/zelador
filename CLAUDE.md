@@ -4,7 +4,7 @@ Deterministic CLI over the Zotero Web API; full design in `SPEC.md`. The agent p
 
 ## Situation → command
 
-- Starting any session → `uv run zel status --json` (mandatory opener: live version, backup marker, pending logs, audit stamp, config presence)
+- Starting any session → `uv run zel status --json` (mandatory opener: live version, backup marker, pending logs, strays in `log/`, audit stamp, config presence)
 - Need the whole library → `uv run zel items --json`
 - Need specific items → `uv run zel items KEY1 KEY2 --json`
 - What changed since the last backup → `uv run zel items --since <backup version> --json`

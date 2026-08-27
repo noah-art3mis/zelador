@@ -53,6 +53,23 @@ class TestReconcile:
         assert entries["op-001"].version == 8  # the object's current version
         assert pending_sessions(tmp_path) == []
 
+    def test_reordered_landed_write_marked_applied(self, tmp_path):
+        # The write landed; Zotero returns the membership set in its own order.
+        # Comparing the facet as an ordered list calls a successful write lost,
+        # so reconcile would re-report it as failed to the user.
+        fake = FakeZotero(
+            items=[make_item("AAAA1111", version=8, collections=["ACOLL222", "ZCOLL111"])]
+        )
+        crashed_session(
+            tmp_path,
+            [op_dict("op-001", "AAAA1111", "collections",
+                     ["ZCOLL111"], ["ZCOLL111", "ACOLL222"], version=1)],
+        )
+        counts = run_reconcile(SESSION, client_for(fake), tmp_path)
+        assert counts == {"applied": 1, "failed": 0}
+        _, entries = read_log(tmp_path / f"{SESSION}.jsonl")
+        assert entries["op-001"].status == "applied"
+
     def test_lost_write_marked_failed(self, tmp_path):
         # The crash hit before the request: current state still equals old.
         fake = FakeZotero(items=[make_item("AAAA1111", version=1, tags=[])])

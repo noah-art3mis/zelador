@@ -240,6 +240,19 @@ class TestVerification:
         outcome = run_apply(make_plan(ops), client_for(fake), backups, log, now=NOW)
         assert outcome.verified is True and outcome.mismatches == []
 
+    def test_server_reordered_collections_still_verify(self, dirs):
+        # An item's collection membership is a set: Zotero returns it in its own
+        # order while expand appends, so a reordered list is not a mismatch.
+        backups, log = dirs
+        fake = FakeZotero(
+            items=[make_item("AAAA1111", version=1, collections=["ZCOLL111"])],
+            library_version=100,
+        )
+        ops = [make_op(facet="collections", op="add_to_collection",
+                       old=["ZCOLL111"], new=["ZCOLL111", "ACOLL222"])]
+        outcome = run_apply(make_plan(ops), client_for(fake), backups, log, now=NOW)
+        assert outcome.verified is True and outcome.mismatches == []
+
     def test_create_and_adopt_apply_and_verify(self, dirs):
         backups, log = dirs
         fake = FakeZotero(

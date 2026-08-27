@@ -14,10 +14,20 @@ import yaml
 
 from zelador.config import TAXONOMY_FILE, ConfigError
 
+# Colours are chosen in Zotero and written down here, so the registry records
+# any `#RRGGBB` rather than dictating a palette — `expand` treats it as
+# authoritative for the whole tagColors array, so a registry that cannot state
+# the user's actual colours makes every plan carry a repaint they never asked
+# for. The Okabe-Ito colourblind-safe palette (jfly.uni-koeln.de/color) remains
+# the recommendation and is what `taxonomy.example.yaml` ships.
+_HEX_COLOUR = re.compile(r"^#[0-9A-Fa-f]{6}$")
+
+# Zotero renders coloured tags as tinted text in its selector, and this one is
+# unreadable there whatever the palette says.
+ILLEGIBLE_COLOURS = {"#F0E442"}  # Okabe-Ito yellow
 COLOURED_CAP = 9  # Zotero pins at most 9 coloured tags
 
 _TAG_NAME = re.compile(r"^[a-z0-9][a-z0-9-]*:[a-z0-9][a-z0-9-]*$")
-_HEX_COLOUR = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
 
 class TaxonomyError(ConfigError):
@@ -136,9 +146,13 @@ def _lint(taxonomy: Taxonomy, path: Path) -> None:
             owner[alias] = t.tag
     coloured = taxonomy.coloured()
     for t in coloured:
-        if not isinstance(t.colour, str) or not _HEX_COLOUR.match(t.colour):
+        if not _HEX_COLOUR.match(t.colour or ""):
             raise TaxonomyError(
-                f"{path}: colour {t.colour!r} on {t.tag!r} is not a #RRGGBB hex colour"
+                f"{path}: colour {t.colour!r} on {t.tag!r} is not #RRGGBB hex"
+            )
+        if t.colour.upper() in ILLEGIBLE_COLOURS:
+            raise TaxonomyError(
+                f"{path}: colour {t.colour!r} on {t.tag!r} is illegible as coloured tag text"
             )
         if not taxonomy.families[t.family].coloured:
             raise TaxonomyError(

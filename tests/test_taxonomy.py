@@ -129,29 +129,34 @@ class TestLint:
         with pytest.raises(taxonomy.TaxonomyError, match="shadow"):
             load(tmp_path, bad)
 
-    def test_colour_outside_any_recommended_palette_accepted(self, tmp_path):
-        """Palette membership is a recommendation, not a rule — Zotero's own hues pass."""
-        ok = (
-            "families:\n  status: {coloured: true}\n"
-            "tags:\n  - tag: status:to-read\n    colour: '#FF8C19'\n"
-        )
-        tax = load(tmp_path, ok)
-        assert tax.tag_colors_value() == [{"name": "status:to-read", "color": "#FF8C19"}]
+    def test_a_hand_picked_colour_is_accepted(self, tmp_path):
+        """Zotero is where colours are actually chosen; the registry records them.
 
-    def test_lowercase_hex_colour_accepted(self, tmp_path):
-        ok = (
+        Rejecting anything outside one palette meant a user who had already
+        picked colours by hand could not write them down, and every plan then
+        carried a repaint of their library they never asked for.
+        """
+        good = (
             "families:\n  status: {coloured: true}\n"
-            "tags:\n  - tag: status:read\n    colour: '#ff8c19'\n"
+            "tags:\n  - tag: status:read\n    colour: '#999999'\n"
         )
-        assert load(tmp_path, ok).coloured()[0].colour == "#ff8c19"
+        assert load(tmp_path, good).coloured()[0].colour == "#999999"
 
-    @pytest.mark.parametrize("bad_colour", ["blue", "#GGGGGG", "#FFF", "#FF8C19FF", "FF8C19"])
-    def test_malformed_colour_rejected(self, tmp_path, bad_colour):
+    def test_illegible_yellow_rejected(self, tmp_path):
+        """The one colour Zotero renders unreadably as coloured tag text."""
         bad = (
             "families:\n  status: {coloured: true}\n"
-            f"tags:\n  - tag: status:read\n    colour: '{bad_colour}'\n"
+            "tags:\n  - tag: status:read\n    colour: '#F0E442'\n"
         )
-        with pytest.raises(taxonomy.TaxonomyError, match="hex colour"):
+        with pytest.raises(taxonomy.TaxonomyError, match="illegible"):
+            load(tmp_path, bad)
+
+    def test_malformed_colour_rejected(self, tmp_path):
+        bad = (
+            "families:\n  status: {coloured: true}\n"
+            "tags:\n  - tag: status:read\n    colour: 'reddish'\n"
+        )
+        with pytest.raises(taxonomy.TaxonomyError, match="#RRGGBB"):
             load(tmp_path, bad)
 
     def test_colour_on_uncoloured_family_rejected(self, tmp_path):
@@ -163,7 +168,9 @@ class TestLint:
             load(tmp_path, bad)
 
     def test_more_than_nine_coloured_tags_rejected(self, tmp_path):
-        entries = "".join(f"  - tag: status:s{i}\n    colour: '#00000{i}'\n" for i in range(10))
+        entries = "".join(
+            f"  - tag: status:s{i}\n    colour: '#00{i:02d}FF'\n" for i in range(10)
+        )
         bad = f"families:\n  status: {{coloured: true}}\ntags:\n{entries}"
         with pytest.raises(taxonomy.TaxonomyError, match="9"):
             load(tmp_path, bad)
