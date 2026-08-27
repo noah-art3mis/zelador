@@ -29,7 +29,7 @@ Push agreed fixes through the standard change loop, exactly as `zelador-review` 
 
 - Author a changeset in `<data dir>/changesets/<slug>.json` (`schema: changeset.v1`, ops from `OPS` in `zelador/write/contracts.py`), one intent group per user-facing decision.
 - `uv run zel validate <changeset> --json`; fix failures in the changeset, never the plan.
-- Approve in chat per intent group – objects touched, old → new, 3–5 sample titles, risk tier – explicit yes/no each.
+- Approve where the risk is, reading the tier `expand` assigned and `zel validate` prints per group. The additive work of a normal intake – `topic:` tags from the registry, collection adds, fills into empty fields – is all `low`: apply it and report per item what each arrival received. The `high` groups wait for an explicit yes/no each, objects touched and old → new: trashing a duplicate twin, folding a tag, overwriting a field the item already had. A typical session earns one round trip, over the duplicates – not thirty over tag writes the registry already vouched for.
 - `uv run zel apply <plan id> --dry-run` first, always; then `uv run zel apply <plan id>`.
 - Relay the outcome and session id; `uv run zel undo <session> --dry-run` previews rollback while regret is cheap.
 
