@@ -1,0 +1,22 @@
+[package]
+name = "zelador"
+version = "0.1.0"
+edition = "2024"
+description = "Rust spike of zelador's read-only path (issue #47)"
+publish = false
+
+[[bin]]
+name = "zel"
+path = "src/main.rs"
+
+[dependencies]
+caseless = "0.2.2"
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+clap = { version = "4.6.8", features = ["derive"] }
+directories = "6.0.0"
+dotenvy = "0.15.7"
+indexmap = "2"
+reqwest = { version = "0.13.5", features = ["blocking", "query"] }
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
+serde_yaml_ng = "0.10.0"
+unicode-general-category = "1.1.0"
