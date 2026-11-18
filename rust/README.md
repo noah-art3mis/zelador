@@ -6,6 +6,7 @@ A partial Rust port of `zel`, built to answer whether a full port is worth it. I
 
 | Command                                    | Python source                                   |
 |--------------------------------------------|-------------------------------------------------|
+| `zel backup [--json]`                      | `backup.py` (writer), `cli.backup` – the JSONL file is byte-identical to Python's |
 | `zel status [--json]`                      | `cli.status`, `status.py`, read half of `backup.py` and `write/changelog.py` |
 | `zel audit tags\|collections [--since N] [--json]` | `audit/runner.py`, `report.py`, `tagmess.py`, `hygiene.py` |
 | API reads (items, collections, tags, library version) | `client.py`: pagination and probe, Backoff/Retry-After, 429/503 retries, key redaction |
@@ -15,7 +16,7 @@ Other audit checks and every other command are not ported. `zel audit` with no c
 
 ## How it is checked
 
-`tests/test_rust_differential.py` runs both CLIs against one `FakeZotero` and identical data directories. It covers 9 commands × 6 scenarios (normal, a forced pagination probe, a 429 retry, a 403 whose body leaks the key, a Backoff header, and a 302 that must not be followed, which runs for `status` only). It asserts equal exit codes, stdout, stderr, files written and API request sequences. The Rust binary reaches the fake through a localhost bridge, using `ZELADOR_API_BASE`, a Rust-only test seam that only debug builds honour.
+`tests/test_rust_differential.py` runs both CLIs against one `FakeZotero` and identical data directories. It covers 11 commands × 8 scenarios: normal, a forced pagination probe, a 429 retry, a 403 whose body leaks the key, a Backoff header, a 302 that must not be followed (run for `status` only), a library unchanged since the last backup, and a seeded `config.yaml` plus registry. Five more cases pin the default config and data dirs to platformdirs' XDG rule. It asserts equal exit codes, stdout, stderr, files written and API request sequences. The Rust binary reaches the fake through a localhost bridge, using `ZELADOR_API_BASE`, a Rust-only test seam that only debug builds honour.
 
 The suite catches every one of these planted bugs: lowercase instead of casefold, a removed pagination probe, compact JSON separators, no key redaction.
 

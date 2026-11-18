@@ -34,6 +34,15 @@ API_KEY = "sekrit-key-123"
 CRATE = REPO_ROOT / "rust"
 FAKE_ORIGIN = "https://api.zotero.org"
 TIMESTAMP = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d{6})?\+00:00")
+# Backup ids: the seeded ones keep their names, a fresh one becomes <stamp>.
+STAMP = re.compile(r"\d{8}T\d{6}Z")
+SEEDED_STAMPS = {"20261001T000000Z", "20261101T120000Z"}
+
+
+def scrub(text: str) -> str:
+    """Erase what the clock decides: ISO timestamps and new backup ids."""
+    text = TIMESTAMP.sub("<now>", text)
+    return STAMP.sub(lambda m: m[0] if m[0] in SEEDED_STAMPS else "<stamp>", text)
 
 
 @pytest.fixture(scope="session")
@@ -114,7 +123,7 @@ def request_log(fake: FakeZotero) -> list[tuple]:
 
 def snapshot(root: Path) -> dict[str, str]:
     return {
-        str(p.relative_to(root)): TIMESTAMP.sub("<now>", p.read_text())
+        scrub(str(p.relative_to(root))): scrub(p.read_text())
         for p in sorted(root.rglob("*"))
         if p.is_file()
     }
@@ -211,6 +220,7 @@ def library_fake() -> FakeZotero:
         items=items,
         collections=collections,
         tags=tags,
+        settings={"tagColors": {"value": [{"name": "Ünread", "color": "#E69F00"}], "version": 70}},
         library_version=77,
         page_size=2,
         emit_next_links=True,
@@ -248,8 +258,16 @@ def seed_config_dir(path: Path) -> None:
     shutil.copy(REPO_ROOT / "taxonomy.example.yaml", path / "taxonomy.yaml")
 
 
+def unchanged_since_backup() -> FakeZotero:
+    """The library still at the seeded backup's version: backup is a verified no-op."""
+    fake = library_fake()
+    fake.library_version = 40
+    return fake
+
+
 SCENARIOS = {
     "healthy": library_fake,
+    "unchanged_since_backup": unchanged_since_backup,
     "configured": library_fake,  # plus seed_config_dir before both runs
     "tags_need_probe": many_tags_probed,
     "retry_then_ok": lambda: _scripted(
@@ -315,12 +333,14 @@ def run_rust(binary: Path, args: list[str], fake: FakeZotero, data: Path) -> dic
 
 def normalise(result: dict, data: Path) -> dict:
     return {
-        k: TIMESTAMP.sub("<now>", v.replace(str(data), "<data>")) if isinstance(v, str) else v
+        k: scrub(v.replace(str(data), "<data>")) if isinstance(v, str) else v
         for k, v in result.items()
     }
 
 
 COMMANDS = [
+    ["backup"],
+    ["backup", "--json"],
     ["status"],
     ["status", "--json"],
     ["audit", "tags"],

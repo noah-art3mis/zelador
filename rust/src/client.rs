@@ -52,6 +52,15 @@ impl Reply {
     }
 }
 
+/// The parameters of a full item dump, as `ZoteroClient.all_items` takes them.
+#[derive(Default)]
+pub struct ItemsQuery<'a> {
+    pub include_trashed: bool,
+    pub include: &'a str,
+    pub style: &'a str,
+    pub if_modified_since: Option<i64>,
+}
+
 pub struct ZoteroClient {
     http: Http,
     base: String,
@@ -189,14 +198,21 @@ impl ZoteroClient {
     ///
     /// A full page with no next link is not trusted as the end (/tags drops
     /// the link early), so the next offset is probed until a short page.
-    fn paginated(&mut self, path: &str, mut params: Params) -> Result<Option<Vec<Value>>, Error> {
+    /// `headers` go on the first request only: a 304 there means nothing changed.
+    fn paginated(
+        &mut self,
+        path: &str,
+        mut params: Params,
+        mut headers: Vec<(&'static str, String)>,
+    ) -> Result<Option<Vec<Value>>, Error> {
         if !params.iter().any(|(k, _)| k == "limit") {
             params.push(("limit".into(), PAGE_LIMIT.to_string()));
         }
         let mut url = path.to_string();
         let mut results = Vec::new();
         loop {
-            let reply = self.request(Method::GET, &url, &params, &[])?;
+            let reply = self.request(Method::GET, &url, &params, &headers)?;
+            headers.clear();
             if reply.status == 304 {
                 return Ok(None);
             }
@@ -234,26 +250,50 @@ impl ZoteroClient {
         }
     }
 
-    pub fn all_items(&mut self, include: &str, style: &str) -> Result<Vec<Value>, Error> {
+    /// Full paginated dump; `None` when `if_modified_since` says nothing changed.
+    pub fn all_items(&mut self, query: ItemsQuery) -> Result<Option<Vec<Value>>, Error> {
         let mut params: Params = Vec::new();
-        if !include.is_empty() {
-            params.push(("include".into(), include.into()));
+        if query.include_trashed {
+            params.push(("includeTrashed".into(), "1".into()));
         }
-        if !style.is_empty() {
-            params.push(("style".into(), style.into()));
+        if !query.include.is_empty() {
+            params.push(("include".into(), query.include.into()));
         }
+        if !query.style.is_empty() {
+            params.push(("style".into(), query.style.into()));
+        }
+        let headers = query
+            .if_modified_since
+            .map(|v| vec![("If-Modified-Since-Version", v.to_string())])
+            .unwrap_or_default();
         let path = format!("{}/items", self.prefix);
-        Ok(self.paginated(&path, params)?.unwrap_or_default())
+        self.paginated(&path, params, headers)
+    }
+
+    /// A library setting (e.g. tagColors); `None` when unset.
+    pub fn setting(&mut self, name: &str) -> Result<Option<Value>, Error> {
+        let path = format!("{}/settings/{name}", self.prefix);
+        let reply = self.request(Method::GET, &path, &Vec::new(), &[])?;
+        if reply.status == 404 {
+            return Ok(None);
+        }
+        serde_json::from_str(&reply.body).map(Some).map_err(|e| {
+            Error::Zotero(self.redact(&format!("GET {path} returned invalid JSON: {e}")))
+        })
     }
 
     pub fn all_collections(&mut self) -> Result<Vec<Value>, Error> {
         let path = format!("{}/collections", self.prefix);
-        Ok(self.paginated(&path, Vec::new())?.unwrap_or_default())
+        Ok(self
+            .paginated(&path, Vec::new(), Vec::new())?
+            .unwrap_or_default())
     }
 
     pub fn all_tags(&mut self) -> Result<Vec<Value>, Error> {
         let path = format!("{}/tags", self.prefix);
-        Ok(self.paginated(&path, Vec::new())?.unwrap_or_default())
+        Ok(self
+            .paginated(&path, Vec::new(), Vec::new())?
+            .unwrap_or_default())
     }
 
     /// Current library version in one cheap request.

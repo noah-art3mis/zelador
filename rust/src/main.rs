@@ -4,6 +4,7 @@
 //! the Python CLI by tests/test_rust_differential.py; see rust/README.md.
 
 mod audit;
+mod backup;
 mod client;
 mod config;
 mod pyjson;
@@ -34,6 +35,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Full-library JSONL snapshot (items incl. trash, collections, tagColors).
+    Backup {
+        /// Final outcome object.
+        #[arg(long = "json")]
+        as_json: bool,
+    },
     /// One-screen session orientation – the skills' mandatory opener.
     Status {
         /// One status object.
@@ -67,6 +74,53 @@ fn api_base() -> String {
 fn make_client(verbose: bool) -> Result<ZoteroClient, Error> {
     let creds = config::load_credentials()?;
     ZoteroClient::new(&creds, &api_base(), verbose)
+}
+
+fn backup(verbose: bool, as_json: bool) -> Result<(), Error> {
+    let backups_dir = config::ensure_dir("backups")?;
+    let mut client = make_client(verbose)?;
+    let Some(path) = backup::run_backup(&mut client, &backups_dir)? else {
+        let info = backup::latest_backup(&backups_dir)?
+            .ok_or_else(|| Error::Config("no-op backup without a previous backup".into()))?;
+        eprintln!(
+            "library unchanged since backup {} — nothing to do",
+            pyjson::py_str(&info.timestamp)
+        );
+        if as_json {
+            println!(
+                "{}",
+                pyjson::dumps(&json!({"noop": true, "library_version": info.library_version}))
+            );
+        }
+        return Ok(());
+    };
+    let stats = backup::backup_stats(&path)?;
+    let version = backup::latest_backup(&backups_dir)?
+        .map(|info| info.library_version)
+        .unwrap_or(Value::Null);
+    if as_json {
+        println!(
+            "{}",
+            pyjson::dumps(&json!({
+                "noop": false,
+                "path": path.to_string_lossy(),
+                "library_version": version,
+                "items": stats.items,
+                "collections": stats.collections,
+                "tags": stats.tags,
+            }))
+        );
+    } else {
+        println!(
+            "wrote {} — version {}, {} items, {} collections, {} tags",
+            path.display(),
+            pyjson::py_str(&version),
+            stats.items,
+            stats.collections,
+            stats.tags
+        );
+    }
+    Ok(())
 }
 
 fn status(verbose: bool, as_json: bool) -> Result<(), Error> {
@@ -134,6 +188,7 @@ fn audit(
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let outcome = match cli.command {
+        Command::Backup { as_json } => backup(cli.verbose, as_json),
         Command::Status { as_json } => status(cli.verbose, as_json),
         Command::Audit {
             check,
