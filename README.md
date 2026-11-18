@@ -10,9 +10,10 @@ The repo is the install unit — there is no published package:
 git clone https://github.com/noah-art3mis/zotero-driver
 cd zotero-driver
 uv sync
-cp .env.example .env      # fill in your Zotero API key and user ID
-cp config.example.yaml config.yaml       # optional
-cp taxonomy.example.yaml taxonomy.yaml   # optional — the tag registry; edit to taste
+mkdir -p ~/.config/zelador   # the config dir on Linux; `uv run zel debug paths` prints yours
+cp .env.example ~/.config/zelador/.env                        # fill in your Zotero API key and user ID
+cp config.example.yaml ~/.config/zelador/config.yaml          # optional
+cp taxonomy.example.yaml ~/.config/zelador/taxonomy.yaml      # optional – the tag registry; edit to taste
 uv run zel --help
 ```
 

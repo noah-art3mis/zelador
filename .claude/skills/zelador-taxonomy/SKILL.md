@@ -11,7 +11,7 @@ Orientation (mandatory, in order):
 
 1. `uv run zel status --json` — confirm a recent backup and audit exist; run `uv run zel backup` and `uv run zel audit` first if stale.
 2. Read the tag-mess audit JSON (`<data dir>/audit/tags.json` — path from `zel debug paths`) and the full tag list with counts: `uv run zel tags --json`.
-3. Read the current `taxonomy.yaml` if present; otherwise start from a fresh copy of `taxonomy.example.yaml`.
+3. Read the current `<config dir>/taxonomy.yaml` (path from `zel debug paths`) if present; otherwise start from a fresh copy of `taxonomy.example.yaml` there.
 
 Then work the vocabulary with the user, in passes:
 
@@ -21,4 +21,4 @@ Then work the vocabulary with the user, in passes:
 
 Rules the registry linter enforces (load fails loudly otherwise): lowercase `family:value` names, declared families only, no duplicate canonical tags, no alias under two tags or shadowing a canonical, `#RRGGBB` colours (Okabe-Ito recommended, `#F0E442` refused as illegible) and only in `coloured` families, at most 9 coloured tags. An `exclusive` family allows one tag of that family per item.
 
-Record decisions directly in `taxonomy.yaml` as they are made. Finish with `uv run zel audit registry` and walk the user through the conformance counts — unknown tags, untriaged items, exclusivity violations, and colour drift are the work the registry has just made visible, not problems to fix in this session.
+Record decisions directly in `<config dir>/taxonomy.yaml` as they are made. Finish with `uv run zel audit registry` and walk the user through the conformance counts — unknown tags, untriaged items, exclusivity violations, and colour drift are the work the registry has just made visible, not problems to fix in this session.

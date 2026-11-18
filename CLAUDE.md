@@ -32,7 +32,7 @@ Deterministic CLI over the Zotero Web API; full design in `SPEC.md`. The agent p
 
 ## Rules
 
-- Never read `.env`; the CLI consumes it itself.
+- Never read `.env`; the CLI consumes it itself. It lives with `config.yaml` and `taxonomy.yaml` in the config dir (`zel debug paths`; `~/.config/zelador/` on Linux), never in the checkout.
 - Reads are cheap but not free: a full dump is ~40 requests. Prefer `--since` scoping and the latest backup/audit files in `<data dir>` (see `zel debug paths`) over re-dumping.
 - The change loop runs in listed order, once per approved plan: `backup` → author changeset JSON in `<data dir>/changesets/` → `validate` → the user approves the high-risk groups in chat → `apply --dry-run` → `apply`. Approval follows the risk tier `expand` assigns and `validate` prints, not the group count: `high` marks a write that removes or overwrites existing state and waits for an explicit yes/no; `low` is purely additive and does not. Keep the two tiers in separate changesets. If any group is rejected, trim the changeset and re-validate — plans are never edited by hand.
 - The closed changeset op vocabulary is defined once, in `OPS` in `zelador/write/contracts.py`; no delete op exists — trash only. Command flags and examples live in `--help`, not here.
