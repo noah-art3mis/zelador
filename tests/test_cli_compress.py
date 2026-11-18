@@ -8,7 +8,7 @@ import pytest
 from pypdf import PdfReader, PdfWriter
 from typer.testing import CliRunner
 
-from zelador import cli, compress_files, config
+from zelador import cli, compress_files
 
 runner = CliRunner()
 
@@ -62,7 +62,7 @@ def env(monkeypatch, tmp_path):
     write_pdf(zotero / "storage" / "AAAAAAAA" / "book.pdf", pages=3, padding=BIG_PADDING)
     config_file = tmp_path / "config.yaml"
     config_file.write_text(f"zotero_data_dir: {zotero}\n")
-    monkeypatch.setattr(config, "CONFIG_FILE", config_file)
+    monkeypatch.setenv("ZELADOR_CONFIG_DIR", str(config_file.parent))
     monkeypatch.setenv("ZELADOR_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setattr(compress_files.shutil, "which", lambda _: "/usr/bin/gs")
     monkeypatch.setattr(compress_files, "compress_pdf", shrink)

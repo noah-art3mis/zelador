@@ -116,11 +116,7 @@ def audit(
     """
     with guard():
         cfg = config.load_config()
-        registry = (
-            taxonomy_mod.load_taxonomy(config.TAXONOMY_FILE)
-            if config.TAXONOMY_FILE.exists()
-            else None
-        )
+        registry = taxonomy_mod.load_taxonomy() if config.taxonomy_file().exists() else None
         client = make_client()
         try:
             summary = audit_runner.run_audit(
@@ -340,14 +336,17 @@ def whoami():
 
 @debug_app.command()
 def paths():
-    """Resolved paths: repo root, data dir, config files, Zotero data dir."""
-    print(f"repo root:     {config.REPO_ROOT}")
+    """Resolved paths: config dir and files, data dir, Zotero data dir."""
+    print(f"config dir:    {config.config_dir()}")
+    for label, path in (
+        (".env", config.env_file()),
+        ("config.yaml", config.config_file()),
+        ("taxonomy.yaml", config.taxonomy_file()),
+    ):
+        print(f"  {label:<13} {path} ({'present' if path.exists() else 'absent'})")
     print(f"data dir:      {config.data_dir()}")
     for sub in config.DATA_SUBDIRS:
         print(f"  {sub + '/':<12} {config.data_dir() / sub}")
-    named = (("config.yaml", config.CONFIG_FILE), ("taxonomy.yaml", config.TAXONOMY_FILE))
-    for label, path in named:
-        print(f"{label}:   {path} ({'present' if path.exists() else 'absent'})")
     try:
         cfg = config.load_config()
         print(f"zotero dir:    {config.discover_zotero_dir(override=cfg.zotero_data_dir)}")

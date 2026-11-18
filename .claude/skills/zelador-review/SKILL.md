@@ -12,7 +12,7 @@ Orientation (mandatory, in order):
 1. `uv run zel status --json` – refuse to continue past unresolved pending sessions (`zel debug reconcile` first) and note the last backup's library version.
 2. `uv run zel backup` – a verified no-op when nothing changed; everything downstream pins to this snapshot.
 3. `uv run zel audit` (add `--since <backup version>` to triage only arrivals), then read `audit-report.md` and the per-check JSON in `<data dir>/audit/` (paths from `zel debug paths`).
-4. Read `taxonomy.yaml` and run `uv run zel audit registry` – canonical tags and aliases constrain every tag proposal. No registry yet? Recommend the `zelador-taxonomy` skill first; without it, tag merges have no canonical targets.
+4. Read `<config dir>/taxonomy.yaml` (path from `zel debug paths`) and run `uv run zel audit registry` – canonical tags and aliases constrain every tag proposal. No registry yet? Recommend the `zelador-taxonomy` skill first; without it, tag merges have no canonical targets.
 
 Then work the findings with the user, in passes: interpret the audit into a short list of themes (case-duplicate tags, alias fold-ins, untriaged items, stray collections) and agree which to tackle this session before authoring anything.
 

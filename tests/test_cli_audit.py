@@ -61,13 +61,12 @@ class TestAuditCommand:
     def test_registry_check_included_when_taxonomy_present(self, fake, monkeypatch, tmp_path):
         registry = tmp_path / "taxonomy.yaml"
         registry.write_text("families:\n  status: {}\ntags:\n  - tag: status:read\n")
-        monkeypatch.setattr(config, "TAXONOMY_FILE", registry)
+        monkeypatch.setenv("ZELADOR_CONFIG_DIR", str(registry.parent))
         result = runner.invoke(cli.app, ["audit", "--json"])
         summary = json.loads(result.stdout.strip())
         assert summary["counts"]["registry"] > 0  # AI/ai tags are unregistered
 
     def test_registry_check_without_taxonomy_is_bad_input(self, fake, monkeypatch, tmp_path):
-        monkeypatch.setattr(config, "TAXONOMY_FILE", tmp_path / "taxonomy.yaml")
         result = runner.invoke(cli.app, ["audit", "registry"])
         assert result.exit_code == 2
 
@@ -100,6 +99,6 @@ class TestAuditCommand:
         registry.write_text(
             "families:\n  status: {}\ntags:\n  - tag: status:read\n    colour: '#123456'\n"
         )
-        monkeypatch.setattr(config, "TAXONOMY_FILE", registry)
+        monkeypatch.setenv("ZELADOR_CONFIG_DIR", str(registry.parent))
         result = runner.invoke(cli.app, ["audit"])
         assert result.exit_code == 1

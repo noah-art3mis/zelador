@@ -44,9 +44,7 @@ def register(app: typer.Typer) -> None:
 
 
 def _zotero_dir() -> Path:
-    # CONFIG_FILE is passed explicitly: load_config binds it as a default at import
-    # time, so a caller that repoints the module attribute would otherwise be ignored.
-    return config.discover_zotero_dir(config.load_config(config.CONFIG_FILE).zotero_data_dir)
+    return config.discover_zotero_dir(config.load_config().zotero_data_dir)
 
 
 def _load(run: str) -> tuple[Path, compress_mod.Report]:

@@ -122,6 +122,14 @@ class TestDebug:
         assert result.exit_code == 0
         assert str(tmp_path / "data") in result.output
 
+    def test_paths_shows_config_dir_and_file_presence(self, fake, isolated_config_dir):
+        isolated_config_dir.mkdir()
+        (isolated_config_dir / "taxonomy.yaml").write_text("families: {}\n")
+        result = runner.invoke(cli.app, ["debug", "paths"])
+        assert f"config dir:    {isolated_config_dir}" in result.output
+        assert f"{isolated_config_dir / 'taxonomy.yaml'} (present)" in result.output
+        assert f"{isolated_config_dir / 'config.yaml'} (absent)" in result.output
+
     def test_probe_prints_raw_json(self, fake):
         result = runner.invoke(cli.app, ["debug", "probe", "tags"])
         assert result.exit_code == 0
@@ -140,6 +148,5 @@ class TestErrors:
         monkeypatch.setenv("ZELADOR_DATA_DIR", str(tmp_path / "data"))
         monkeypatch.delenv("ZOTERO_API_KEY", raising=False)
         monkeypatch.delenv("ZOTERO_USER_ID", raising=False)
-        monkeypatch.setattr(cli.config, "REPO_ROOT", tmp_path)
         result = runner.invoke(cli.app, ["items"])
         assert result.exit_code == 1

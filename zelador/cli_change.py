@@ -67,8 +67,8 @@ def validate(
             note("error: no backup exists — run `zel backup` first")
             raise typer.Exit(1)
         registry = (
-            taxonomy_mod.load_taxonomy(config.TAXONOMY_FILE)
-            if config.TAXONOMY_FILE.exists()
+            taxonomy_mod.load_taxonomy()
+            if config.taxonomy_file().exists()
             else None
         )
         try:

@@ -12,7 +12,7 @@ Orientation (mandatory, in order):
 1. `uv run zel status --json` – refuse to continue past unresolved pending sessions (`zel debug reconcile` first). The previous backup's `library_version` is the **marker** – record it before anything moves it.
 2. `uv run zel backup` – a verified no-op when nothing changed; everything downstream pins to this snapshot. If the live version already equals the marker, nothing arrived – report that and stop.
 3. `uv run zel audit --since <marker>` – findings for arrivals only; read the report and per-check JSON in `<data dir>/audit/` (paths from `zel debug paths`).
-4. `uv run zel items --since <marker> --json` – the arrivals themselves; read `taxonomy.yaml` so every tag proposal targets a registered canonical. No registry yet? Recommend the `zelador-taxonomy` skill first.
+4. `uv run zel items --since <marker> --json` – the arrivals themselves; read `<config dir>/taxonomy.yaml` so every tag proposal targets a registered canonical. No registry yet? Recommend the `zelador-taxonomy` skill first.
 
 Then triage each arrival with the user. For every new item propose, from the audit findings and the item itself:
 

@@ -38,34 +38,54 @@ pub struct Config {
     pub style: String,
 }
 
-/// The checkout this binary was built from. Python resolves config.yaml and
-/// .env relative to its package; a distributed binary has no checkout, which
-/// is a design question for the full port (see rust/README.md).
-pub fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("crate lives inside the repo")
-        .to_path_buf()
+/// `$ZELADOR_CONFIG_DIR`, else platformdirs' `user_config_dir("zelador")`.
+pub fn config_dir() -> PathBuf {
+    if let Some(dir) = env::var_os("ZELADOR_CONFIG_DIR").filter(|v| !v.is_empty()) {
+        return normalise_dir(&dir.to_string_lossy());
+    }
+    platform_dir("XDG_CONFIG_HOME", ".config")
+}
+
+/// platformdirs' rule, which differs from the `directories` crate's: on Linux
+/// and macOS a set `$XDG_*_HOME` wins after stripping whitespace, relative
+/// values included; otherwise `~/<linux_default>` on Linux and Application
+/// Support on macOS. Windows uses the local (not roaming) app data dir, with
+/// appauthor defaulting to appname, for config and data alike.
+fn platform_dir(xdg_var: &str, linux_default: &str) -> PathBuf {
+    let base = directories::BaseDirs::new().expect("a home directory");
+    if cfg!(windows) {
+        return base.data_local_dir().join("zelador").join("zelador");
+    }
+    let xdg = env::var(xdg_var).unwrap_or_default();
+    let root = match xdg.trim() {
+        "" if cfg!(target_os = "macos") => base.home_dir().join("Library/Application Support"),
+        "" => base.home_dir().join(linux_default),
+        set => PathBuf::from(set),
+    };
+    normalise_dir(&root.join("zelador").to_string_lossy())
+}
+
+pub fn env_file() -> PathBuf {
+    config_dir().join(".env")
 }
 
 pub fn config_file() -> PathBuf {
-    repo_root().join("config.yaml")
+    config_dir().join("config.yaml")
 }
 
 pub fn taxonomy_file() -> PathBuf {
-    repo_root().join("taxonomy.yaml")
+    config_dir().join("taxonomy.yaml")
 }
 
 pub fn load_credentials() -> Result<Credentials, Error> {
     // Like python-dotenv's default: a missing file is fine, set variables win.
-    let _ = dotenvy::from_path(repo_root().join(".env"));
+    let path = env_file();
+    let _ = dotenvy::from_path(&path);
     let read = |name: &str| env::var(name).ok().filter(|v| !v.is_empty());
-    let api_key = read("ZOTERO_API_KEY").ok_or_else(|| {
-        Error::Config("ZOTERO_API_KEY is not set — add it to .env at the repo root".into())
-    })?;
-    let user_id = read("ZOTERO_USER_ID").ok_or_else(|| {
-        Error::Config("ZOTERO_USER_ID is not set — add it to .env at the repo root".into())
-    })?;
+    let missing =
+        |name: &str| Error::Config(format!("{name} is not set — add it to {}", path.display()));
+    let api_key = read("ZOTERO_API_KEY").ok_or_else(|| missing("ZOTERO_API_KEY"))?;
+    let user_id = read("ZOTERO_USER_ID").ok_or_else(|| missing("ZOTERO_USER_ID"))?;
     Ok(Credentials { api_key, user_id })
 }
 
@@ -74,13 +94,7 @@ pub fn data_dir() -> PathBuf {
     if let Some(dir) = env::var_os("ZELADOR_DATA_DIR").filter(|v| !v.is_empty()) {
         return normalise_dir(&dir.to_string_lossy());
     }
-    let base = directories::BaseDirs::new().expect("a home directory");
-    if cfg!(windows) {
-        // platformdirs defaults appauthor to appname on Windows.
-        base.data_local_dir().join("zelador").join("zelador")
-    } else {
-        base.data_dir().join("zelador")
-    }
+    platform_dir("XDG_DATA_HOME", ".local/share")
 }
 
 /// pathlib's normalisation: drop `.` components and doubled or trailing

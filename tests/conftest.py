@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 import re
 from collections import deque
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
 
 USER_ID = "11868292"
+REPO_ROOT = Path(__file__).resolve().parent.parent  # the shipped *.example templates, rust/
 
 
 def make_item(
@@ -349,6 +351,21 @@ class FakeZotero:
 
     def _json(self, obj) -> httpx.Response:
         return httpx.Response(200, json=obj, headers=self._version_header())
+
+
+@pytest.fixture(autouse=True)
+def isolated_config_dir(monkeypatch, tmp_path):
+    """Every test gets an empty config dir and no credentials in the environment,
+    so the user's real .env, config.yaml and taxonomy.yaml can never leak into a
+    run, and a .env a test loads cannot leak into the next one."""
+    path = tmp_path / "config"
+    monkeypatch.setenv("ZELADOR_CONFIG_DIR", str(path))
+    for name in ("ZOTERO_API_KEY", "ZOTERO_USER_ID"):
+        # setenv first: delenv on an unset variable records nothing to restore,
+        # so a value load_dotenv writes later would outlive the test.
+        monkeypatch.setenv(name, "")
+        monkeypatch.delenv(name)
+    return path
 
 
 @pytest.fixture

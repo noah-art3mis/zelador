@@ -2,8 +2,8 @@
 
 import pytest
 
+from tests.conftest import REPO_ROOT
 from zelador import taxonomy
-from zelador.config import REPO_ROOT
 
 VALID = """
 families:

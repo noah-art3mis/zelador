@@ -25,10 +25,10 @@ import httpx
 import pytest
 from typer.testing import CliRunner
 
-from tests.conftest import USER_ID, FakeZotero, make_collection, make_item, make_tag
-from zelador import cli
+from tests.conftest import REPO_ROOT, USER_ID, FakeZotero, make_collection, make_item, make_tag
+from zelador import cli, config
 from zelador.client import ZoteroClient
-from zelador.config import REPO_ROOT, Credentials
+from zelador.config import Credentials
 
 API_KEY = "sekrit-key-123"
 CRATE = REPO_ROOT / "rust"
@@ -241,8 +241,16 @@ def many_tags_probed() -> FakeZotero:
     return tags_without_next_links(fake)
 
 
+def seed_config_dir(path: Path) -> None:
+    """A real config.yaml and registry, read identically by both implementations."""
+    path.mkdir(parents=True)
+    (path / "config.yaml").write_text("style: chicago-note-bibliography\ncitekey_sources: []\n")
+    shutil.copy(REPO_ROOT / "taxonomy.example.yaml", path / "taxonomy.yaml")
+
+
 SCENARIOS = {
     "healthy": library_fake,
+    "configured": library_fake,  # plus seed_config_dir before both runs
     "tags_need_probe": many_tags_probed,
     "retry_then_ok": lambda: _scripted(
         library_fake(), [httpx.Response(429, headers={"Retry-After": "0"})]
@@ -292,6 +300,7 @@ def run_rust(binary: Path, args: list[str], fake: FakeZotero, data: Path) -> dic
         "HOME": str(data.parent),
         "ZELADOR_DATA_DIR": str(data),
         "ZELADOR_API_BASE": bridge.origin,
+        "ZELADOR_CONFIG_DIR": os.environ["ZELADOR_CONFIG_DIR"],  # conftest's per-test dir
         "ZOTERO_API_KEY": API_KEY,
         "ZOTERO_USER_ID": USER_ID,
     }
@@ -335,10 +344,12 @@ CASES = [
 
 
 @pytest.mark.parametrize(("scenario", "args"), CASES)
-def test_rust_matches_python(rust_bin, tmp_path, monkeypatch, scenario, args):
+def test_rust_matches_python(rust_bin, tmp_path, monkeypatch, isolated_config_dir, scenario, args):
     py_data, rs_data = tmp_path / "py" / "data", tmp_path / "rs" / "data"
     seed_data_dir(py_data, strays=args[0] == "status")
     seed_data_dir(rs_data, strays=args[0] == "status")
+    if scenario == "configured":
+        seed_config_dir(isolated_config_dir)
     py_fake, rs_fake = SCENARIOS[scenario](), SCENARIOS[scenario]()
 
     expected = normalise(run_python(args, py_fake, py_data, monkeypatch), py_data)
@@ -348,3 +359,49 @@ def test_rust_matches_python(rust_bin, tmp_path, monkeypatch, scenario, args):
     assert snapshot(rs_data) == snapshot(py_data)
     assert request_log(rs_fake) == request_log(py_fake)
     assert API_KEY not in actual["stdout"] + actual["stderr"]
+
+
+XDG_VALUES = {"absolute": "<tmp>/xdg", "relative": "rel", "padded": "  <tmp>/xdg  ", "blank": "  "}
+
+
+@pytest.mark.parametrize("xdg", [*XDG_VALUES, "unset"])
+def test_default_dirs_resolve_like_platformdirs(rust_bin, tmp_path, monkeypatch, xdg):
+    """With no ZELADOR_* override, Rust must land on platformdirs' config and data
+    dirs: XDG values are stripped, relative ones accepted, blank ones ignored."""
+    env = {"HOME": str(tmp_path / "home")}
+    if xdg != "unset":
+        value = XDG_VALUES[xdg].replace("<tmp>", str(tmp_path))
+        # The same shape for data, so padding reaches both ends of both variables.
+        data_value = XDG_VALUES[xdg].replace("<tmp>/xdg", f"{tmp_path}/xdg-data")
+        data_value = data_value.replace("rel", "rel-data")
+        env |= {"XDG_CONFIG_HOME": value, "XDG_DATA_HOME": data_value}
+    monkeypatch.chdir(tmp_path)
+    for name in ("ZELADOR_CONFIG_DIR", "ZELADOR_DATA_DIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    expected_config, expected_data = config.config_dir(), config.data_dir()
+    expected_config.mkdir(parents=True)
+    (expected_config / "config.yaml").write_text("style: apa\n")
+
+    bridge = Bridge(library_fake())
+    try:
+        proc = subprocess.run(
+            [str(rust_bin), "status", "--json"],
+            env={
+                "PATH": os.environ["PATH"],
+                "ZELADOR_API_BASE": bridge.origin,
+                "ZOTERO_API_KEY": API_KEY,
+                "ZOTERO_USER_ID": USER_ID,
+                **env,
+            },
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    finally:
+        bridge.close()
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout)["config"]["config_yaml"] is True
+    assert (tmp_path / expected_data / "backups").is_dir()
