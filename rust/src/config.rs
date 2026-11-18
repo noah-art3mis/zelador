@@ -38,19 +38,31 @@ pub struct Config {
     pub style: String,
 }
 
-/// `$ZELADOR_CONFIG_DIR`, else the directory platformdirs' `user_config_dir`
-/// picks for "zelador": `$XDG_CONFIG_HOME` or `~/.config` on Linux, Application
-/// Support on macOS, and on Windows the local (not roaming) app data dir.
+/// `$ZELADOR_CONFIG_DIR`, else platformdirs' `user_config_dir("zelador")`.
 pub fn config_dir() -> PathBuf {
     if let Some(dir) = env::var_os("ZELADOR_CONFIG_DIR").filter(|v| !v.is_empty()) {
         return normalise_dir(&dir.to_string_lossy());
     }
+    platform_dir("XDG_CONFIG_HOME", ".config")
+}
+
+/// platformdirs' rule, which differs from the `directories` crate's: on Linux
+/// and macOS a set `$XDG_*_HOME` wins after stripping whitespace, relative
+/// values included; otherwise `~/<linux_default>` on Linux and Application
+/// Support on macOS. Windows uses the local (not roaming) app data dir, with
+/// appauthor defaulting to appname, for config and data alike.
+fn platform_dir(xdg_var: &str, linux_default: &str) -> PathBuf {
     let base = directories::BaseDirs::new().expect("a home directory");
     if cfg!(windows) {
-        base.data_local_dir().join("zelador").join("zelador")
-    } else {
-        base.config_dir().join("zelador")
+        return base.data_local_dir().join("zelador").join("zelador");
     }
+    let xdg = env::var(xdg_var).unwrap_or_default();
+    let root = match xdg.trim() {
+        "" if cfg!(target_os = "macos") => base.home_dir().join("Library/Application Support"),
+        "" => base.home_dir().join(linux_default),
+        set => PathBuf::from(set),
+    };
+    normalise_dir(&root.join("zelador").to_string_lossy())
 }
 
 pub fn env_file() -> PathBuf {
@@ -82,13 +94,7 @@ pub fn data_dir() -> PathBuf {
     if let Some(dir) = env::var_os("ZELADOR_DATA_DIR").filter(|v| !v.is_empty()) {
         return normalise_dir(&dir.to_string_lossy());
     }
-    let base = directories::BaseDirs::new().expect("a home directory");
-    if cfg!(windows) {
-        // platformdirs defaults appauthor to appname on Windows.
-        base.data_local_dir().join("zelador").join("zelador")
-    } else {
-        base.data_dir().join("zelador")
-    }
+    platform_dir("XDG_DATA_HOME", ".local/share")
 }
 
 /// pathlib's normalisation: drop `.` components and doubled or trailing

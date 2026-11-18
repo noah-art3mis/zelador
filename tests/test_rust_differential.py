@@ -25,10 +25,10 @@ import httpx
 import pytest
 from typer.testing import CliRunner
 
-from tests.conftest import USER_ID, FakeZotero, make_collection, make_item, make_tag
-from zelador import cli
+from tests.conftest import REPO_ROOT, USER_ID, FakeZotero, make_collection, make_item, make_tag
+from zelador import cli, config
 from zelador.client import ZoteroClient
-from zelador.config import REPO_ROOT, Credentials
+from zelador.config import Credentials
 
 API_KEY = "sekrit-key-123"
 CRATE = REPO_ROOT / "rust"
@@ -359,3 +359,47 @@ def test_rust_matches_python(rust_bin, tmp_path, monkeypatch, isolated_config_di
     assert snapshot(rs_data) == snapshot(py_data)
     assert request_log(rs_fake) == request_log(py_fake)
     assert API_KEY not in actual["stdout"] + actual["stderr"]
+
+
+XDG_VALUES = {"absolute": "<tmp>/xdg", "relative": "rel", "padded": "  <tmp>/xdg  ", "blank": "  "}
+
+
+@pytest.mark.parametrize("xdg", [*XDG_VALUES, "unset"])
+def test_default_dirs_resolve_like_platformdirs(rust_bin, tmp_path, monkeypatch, xdg):
+    """With no ZELADOR_* override, Rust must land on platformdirs' config and data
+    dirs: XDG values are stripped, relative ones accepted, blank ones ignored."""
+    env = {"HOME": str(tmp_path / "home")}
+    if xdg != "unset":
+        value = XDG_VALUES[xdg].replace("<tmp>", str(tmp_path))
+        data_value = value + "-data" if value.strip() else value
+        env |= {"XDG_CONFIG_HOME": value, "XDG_DATA_HOME": data_value}
+    monkeypatch.chdir(tmp_path)
+    for name in ("ZELADOR_CONFIG_DIR", "ZELADOR_DATA_DIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    expected_config, expected_data = config.config_dir(), config.data_dir()
+    expected_config.mkdir(parents=True)
+    (expected_config / "config.yaml").write_text("style: apa\n")
+
+    bridge = Bridge(library_fake())
+    try:
+        proc = subprocess.run(
+            [str(rust_bin), "status", "--json"],
+            env={
+                "PATH": os.environ["PATH"],
+                "ZELADOR_API_BASE": bridge.origin,
+                "ZOTERO_API_KEY": API_KEY,
+                "ZOTERO_USER_ID": USER_ID,
+                **env,
+            },
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    finally:
+        bridge.close()
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout)["config"]["config_yaml"] is True
+    assert (tmp_path / expected_data / "backups").is_dir()
