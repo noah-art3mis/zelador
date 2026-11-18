@@ -371,7 +371,9 @@ def test_default_dirs_resolve_like_platformdirs(rust_bin, tmp_path, monkeypatch,
     env = {"HOME": str(tmp_path / "home")}
     if xdg != "unset":
         value = XDG_VALUES[xdg].replace("<tmp>", str(tmp_path))
-        data_value = value + "-data" if value.strip() else value
+        # The same shape for data, so padding reaches both ends of both variables.
+        data_value = XDG_VALUES[xdg].replace("<tmp>/xdg", f"{tmp_path}/xdg-data")
+        data_value = data_value.replace("rel", "rel-data")
         env |= {"XDG_CONFIG_HOME": value, "XDG_DATA_HOME": data_value}
     monkeypatch.chdir(tmp_path)
     for name in ("ZELADOR_CONFIG_DIR", "ZELADOR_DATA_DIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME"):
