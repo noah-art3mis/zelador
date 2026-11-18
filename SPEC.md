@@ -260,8 +260,12 @@ Skills encode the safety flow so it is followed by construction, not memory.
 - **M6** — Rust port, phased (issue #47). Each phase lands behind the differential test, and the Python CLI stays the product until R5.
   - **R0 (done)** — read-path spike: `zel status`, `zel audit tags|collections`, client, config; PDF crate verdict.
   - **R1 (done)** — config location: move `.env`, `config.yaml` and `taxonomy.yaml` out of the checkout into the platform config directory, in Python first, because a binary has no checkout to find them in.
-  - **R2** — write path: contracts, expand, validate, apply, undo, recover, changelog. `tests/golden/` stays the shared contract, and a session log written by either implementation must be undoable by the other.
-  - **R3** — remaining reads: `items`, `tags`, `collections`, `backup`, the other audit checks, `lookup`, and `local` (on `rusqlite`).
+  - **R2** — write path, in four parts. `tests/golden/` stays the shared contract, and a session log written by either implementation must be undoable by the other.
+    - **R2a (done)** — `zel backup`, first, because every plan pins itself to a backup and restore reads objects back out of it: the file must be byte-identical.
+    - **R2b** — contracts, the taxonomy registry, and `zel validate` (expand into a version-pinned plan).
+    - **R2c** — `zel apply`, the session log and the client's batch writes.
+    - **R2d** — `zel undo`, `zel debug reconcile`, `zel debug restore`.
+  - **R3** — remaining reads: `items`, `tags`, `collections`, the other audit checks, `lookup`, and `local` (on `rusqlite`).
   - **R4** — `compress`, gated: first measure the chosen Rust extractor's text length across Ghostscript rewrites against pypdf's verdicts (`rust/PDF.md`) and record the extractor in each report. If the Rust extractor rejects compressions that pypdf accepts, `compress` stays in Python.
   - **R5** — cutover: the binary becomes `zel`, the skills and `CLAUDE.md` switch to it, and the Python package is retired. Decide then whether to keep Python's byte-exact output or change the output format once on purpose.
 - **Steady state (after M5)** — cleanup gives way to intake: recurring `zelador-intake` sessions triage what arrived since the last one, keeping new items conformant so the library never needs a second campaign; full `zelador-review` drops to an occasional health check.
