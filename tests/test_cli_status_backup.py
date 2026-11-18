@@ -79,6 +79,16 @@ class TestStatusCommand:
         assert "2 items" in result.output
         assert "500" in result.output
 
+    def test_config_presence_follows_the_config_dir(self, fake, isolated_config_dir):
+        isolated_config_dir.mkdir()
+        (isolated_config_dir / "config.yaml").write_text("style: apa\n")
+        status = json.loads(runner.invoke(cli.app, ["status", "--json"]).stdout.strip())
+        assert status["config"] == {
+            "config_yaml": True,
+            "taxonomy_yaml": False,
+            "citekey_sources": False,
+        }
+
     def test_json_object(self, fake):
         runner.invoke(cli.app, ["backup"])
         result = runner.invoke(cli.app, ["status", "--json"])

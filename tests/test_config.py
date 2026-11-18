@@ -1,5 +1,7 @@
 """Tests for zelador.config — env credentials, data dir, config.yaml, Zotero dir discovery."""
 
+from pathlib import Path
+
 import pytest
 
 from zelador import config
@@ -24,6 +26,41 @@ class TestCredentials:
         monkeypatch.delenv("ZOTERO_USER_ID", raising=False)
         with pytest.raises(config.ConfigError, match="ZOTERO_USER_ID"):
             config.load_credentials(dotenv_path=tmp_path / ".env")
+
+
+class TestConfigDir:
+    def test_env_override_wins(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("ZELADOR_CONFIG_DIR", str(tmp_path / "cfg"))
+        assert config.config_dir() == tmp_path / "cfg"
+
+    def test_defaults_to_platform_config_dir(self, monkeypatch):
+        import platformdirs
+
+        monkeypatch.delenv("ZELADOR_CONFIG_DIR", raising=False)
+        assert config.config_dir() == Path(platformdirs.user_config_dir("zelador"))
+
+    def test_config_files_live_in_the_config_dir(self, isolated_config_dir):
+        assert config.env_file() == isolated_config_dir / ".env"
+        assert config.config_file() == isolated_config_dir / "config.yaml"
+        assert config.taxonomy_file() == isolated_config_dir / "taxonomy.yaml"
+
+    def test_credentials_load_from_config_dir_env(self, monkeypatch, isolated_config_dir):
+        monkeypatch.delenv("ZOTERO_API_KEY", raising=False)
+        monkeypatch.delenv("ZOTERO_USER_ID", raising=False)
+        isolated_config_dir.mkdir()
+        (isolated_config_dir / ".env").write_text("ZOTERO_API_KEY=k\nZOTERO_USER_ID=7\n")
+        creds = config.load_credentials()
+        assert (creds.api_key, creds.user_id) == ("k", "7")
+
+    def test_missing_credentials_name_the_config_dir_env(self, monkeypatch, isolated_config_dir):
+        monkeypatch.delenv("ZOTERO_API_KEY", raising=False)
+        with pytest.raises(config.ConfigError, match=str(isolated_config_dir / ".env")):
+            config.load_credentials()
+
+    def test_load_config_reads_config_dir_by_default(self, isolated_config_dir):
+        isolated_config_dir.mkdir()
+        (isolated_config_dir / "config.yaml").write_text("style: chicago\n")
+        assert config.load_config().style == "chicago"
 
 
 class TestDataDir:

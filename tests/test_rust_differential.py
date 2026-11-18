@@ -241,8 +241,16 @@ def many_tags_probed() -> FakeZotero:
     return tags_without_next_links(fake)
 
 
+def seed_config_dir(path: Path) -> None:
+    """A real config.yaml and registry, read identically by both implementations."""
+    path.mkdir(parents=True)
+    (path / "config.yaml").write_text("style: chicago-note-bibliography\ncitekey_sources: []\n")
+    shutil.copy(REPO_ROOT / "taxonomy.example.yaml", path / "taxonomy.yaml")
+
+
 SCENARIOS = {
     "healthy": library_fake,
+    "configured": library_fake,  # plus seed_config_dir before both runs
     "tags_need_probe": many_tags_probed,
     "retry_then_ok": lambda: _scripted(
         library_fake(), [httpx.Response(429, headers={"Retry-After": "0"})]
@@ -292,6 +300,7 @@ def run_rust(binary: Path, args: list[str], fake: FakeZotero, data: Path) -> dic
         "HOME": str(data.parent),
         "ZELADOR_DATA_DIR": str(data),
         "ZELADOR_API_BASE": bridge.origin,
+        "ZELADOR_CONFIG_DIR": os.environ["ZELADOR_CONFIG_DIR"],  # conftest's per-test dir
         "ZOTERO_API_KEY": API_KEY,
         "ZOTERO_USER_ID": USER_ID,
     }
@@ -335,10 +344,12 @@ CASES = [
 
 
 @pytest.mark.parametrize(("scenario", "args"), CASES)
-def test_rust_matches_python(rust_bin, tmp_path, monkeypatch, scenario, args):
+def test_rust_matches_python(rust_bin, tmp_path, monkeypatch, isolated_config_dir, scenario, args):
     py_data, rs_data = tmp_path / "py" / "data", tmp_path / "rs" / "data"
     seed_data_dir(py_data, strays=args[0] == "status")
     seed_data_dir(rs_data, strays=args[0] == "status")
+    if scenario == "configured":
+        seed_config_dir(isolated_config_dir)
     py_fake, rs_fake = SCENARIOS[scenario](), SCENARIOS[scenario]()
 
     expected = normalise(run_python(args, py_fake, py_data, monkeypatch), py_data)

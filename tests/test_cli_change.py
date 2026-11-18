@@ -6,7 +6,7 @@ import pytest
 from typer.testing import CliRunner
 
 from tests.conftest import FakeZotero, make_collection, make_item
-from zelador import cli, config
+from zelador import cli
 from zelador.client import ZoteroClient
 from zelador.config import Credentials
 
@@ -29,7 +29,7 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setenv("ZELADOR_DATA_DIR", str(tmp_path / "data"))
     taxonomy_file = tmp_path / "taxonomy.yaml"
     taxonomy_file.write_text(TAXONOMY_YAML)
-    monkeypatch.setattr(config, "TAXONOMY_FILE", taxonomy_file)
+    monkeypatch.setenv("ZELADOR_CONFIG_DIR", str(taxonomy_file.parent))
     fake = FakeZotero(
         items=[
             make_item("AAAA1111", version=7, tags=[{"tag": "AI", "type": 1}]),

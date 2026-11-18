@@ -12,7 +12,7 @@ from pathlib import Path
 
 import yaml
 
-from zelador.config import TAXONOMY_FILE, ConfigError
+from zelador.config import ConfigError, taxonomy_file
 
 # Colours are chosen in Zotero and written down here, so the registry records
 # any `#RRGGBB` rather than dictating a palette — `expand` treats it as
@@ -76,8 +76,9 @@ class Taxonomy:
         return [{"name": t.tag, "color": t.colour} for t in self.coloured()]
 
 
-def load_taxonomy(path: Path = TAXONOMY_FILE) -> Taxonomy:
+def load_taxonomy(path: Path | None = None) -> Taxonomy:
     """Parse and lint the registry file."""
+    path = path or taxonomy_file()
     if not path.exists():
         raise TaxonomyError(f"no taxonomy at {path} — copy taxonomy.example.yaml to start one")
     raw = yaml.safe_load(path.read_text())

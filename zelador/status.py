@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from zelador import backup
-from zelador.config import CONFIG_FILE, TAXONOMY_FILE, Config
+from zelador.config import Config, config_file, taxonomy_file
 from zelador.write.changelog import is_session_log, unresolved_ops
 
 
@@ -71,8 +71,8 @@ def local_status(backups_dir: Path, log_dir: Path, audit_dir: Path, cfg: Config)
         "foreign_logs": foreign,
         "audit": latest_audit(audit_dir),
         "config": {
-            "config_yaml": CONFIG_FILE.exists(),
-            "taxonomy_yaml": TAXONOMY_FILE.exists(),
+            "config_yaml": config_file().exists(),
+            "taxonomy_yaml": taxonomy_file().exists(),
             "citekey_sources": bool(cfg.citekey_sources),
         },
     }

@@ -1,4 +1,4 @@
-"""Configuration: credentials, data directories, config.yaml, Zotero data dir discovery."""
+"""Configuration: credentials, config and data dirs, config.yaml, Zotero data dir discovery."""
 
 from __future__ import annotations
 
@@ -11,9 +11,7 @@ import platformdirs
 import yaml
 from dotenv import load_dotenv
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-CONFIG_FILE = REPO_ROOT / "config.yaml"
-TAXONOMY_FILE = REPO_ROOT / "taxonomy.yaml"
+REPO_ROOT = Path(__file__).resolve().parent.parent  # the shipped *.example.yaml templates
 WINDOWS_USERS_ROOT = Path("/mnt/c/Users")
 
 DATA_SUBDIRS = ("backups", "audit", "changesets", "plans", "cache", "log", "compress")
@@ -36,15 +34,37 @@ class Config:
     style: str = "apa"
 
 
+def config_dir() -> Path:
+    """Where .env, config.yaml and taxonomy.yaml live: $ZELADOR_CONFIG_DIR or the
+    platform-native config location – never the checkout, which a binary lacks."""
+    override = os.environ.get("ZELADOR_CONFIG_DIR")
+    if override:
+        return Path(override)
+    return Path(platformdirs.user_config_dir("zelador"))
+
+
+def env_file() -> Path:
+    return config_dir() / ".env"
+
+
+def config_file() -> Path:
+    return config_dir() / "config.yaml"
+
+
+def taxonomy_file() -> Path:
+    return config_dir() / "taxonomy.yaml"
+
+
 def load_credentials(dotenv_path: Path | None = None) -> Credentials:
-    """Read API credentials from the environment (.env at repo root is loaded first)."""
-    load_dotenv(dotenv_path or REPO_ROOT / ".env")
+    """Read API credentials from the environment (<config dir>/.env is loaded first)."""
+    dotenv_path = dotenv_path or env_file()
+    load_dotenv(dotenv_path)
     api_key = os.environ.get("ZOTERO_API_KEY")
     user_id = os.environ.get("ZOTERO_USER_ID")
     if not api_key:
-        raise ConfigError("ZOTERO_API_KEY is not set — add it to .env at the repo root")
+        raise ConfigError(f"ZOTERO_API_KEY is not set — add it to {dotenv_path}")
     if not user_id:
-        raise ConfigError("ZOTERO_USER_ID is not set — add it to .env at the repo root")
+        raise ConfigError(f"ZOTERO_USER_ID is not set — add it to {dotenv_path}")
     return Credentials(api_key=api_key, user_id=user_id)
 
 
@@ -63,8 +83,9 @@ def ensure_dir(subdir: str) -> Path:
     return path
 
 
-def load_config(path: Path = CONFIG_FILE) -> Config:
+def load_config(path: Path | None = None) -> Config:
     """Load config.yaml (three keys, all optional); absent file means defaults."""
+    path = path or config_file()
     if not path.exists():
         return Config()
     raw = yaml.safe_load(path.read_text()) or {}

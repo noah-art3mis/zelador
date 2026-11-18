@@ -351,6 +351,15 @@ class FakeZotero:
         return httpx.Response(200, json=obj, headers=self._version_header())
 
 
+@pytest.fixture(autouse=True)
+def isolated_config_dir(monkeypatch, tmp_path):
+    """Every test gets an empty config dir, so the user's real .env, config.yaml
+    and taxonomy.yaml can never leak into a run."""
+    path = tmp_path / "config"
+    monkeypatch.setenv("ZELADOR_CONFIG_DIR", str(path))
+    return path
+
+
 @pytest.fixture
 def fake():
     return FakeZotero()

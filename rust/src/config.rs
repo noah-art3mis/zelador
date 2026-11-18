@@ -38,34 +38,42 @@ pub struct Config {
     pub style: String,
 }
 
-/// The checkout this binary was built from. Python resolves config.yaml and
-/// .env relative to its package; a distributed binary has no checkout, which
-/// is a design question for the full port (see rust/README.md).
-pub fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("crate lives inside the repo")
-        .to_path_buf()
+/// `$ZELADOR_CONFIG_DIR`, else the directory platformdirs' `user_config_dir`
+/// picks for "zelador": `$XDG_CONFIG_HOME` or `~/.config` on Linux, Application
+/// Support on macOS, and on Windows the local (not roaming) app data dir.
+pub fn config_dir() -> PathBuf {
+    if let Some(dir) = env::var_os("ZELADOR_CONFIG_DIR").filter(|v| !v.is_empty()) {
+        return normalise_dir(&dir.to_string_lossy());
+    }
+    let base = directories::BaseDirs::new().expect("a home directory");
+    if cfg!(windows) {
+        base.data_local_dir().join("zelador").join("zelador")
+    } else {
+        base.config_dir().join("zelador")
+    }
+}
+
+pub fn env_file() -> PathBuf {
+    config_dir().join(".env")
 }
 
 pub fn config_file() -> PathBuf {
-    repo_root().join("config.yaml")
+    config_dir().join("config.yaml")
 }
 
 pub fn taxonomy_file() -> PathBuf {
-    repo_root().join("taxonomy.yaml")
+    config_dir().join("taxonomy.yaml")
 }
 
 pub fn load_credentials() -> Result<Credentials, Error> {
     // Like python-dotenv's default: a missing file is fine, set variables win.
-    let _ = dotenvy::from_path(repo_root().join(".env"));
+    let path = env_file();
+    let _ = dotenvy::from_path(&path);
     let read = |name: &str| env::var(name).ok().filter(|v| !v.is_empty());
-    let api_key = read("ZOTERO_API_KEY").ok_or_else(|| {
-        Error::Config("ZOTERO_API_KEY is not set — add it to .env at the repo root".into())
-    })?;
-    let user_id = read("ZOTERO_USER_ID").ok_or_else(|| {
-        Error::Config("ZOTERO_USER_ID is not set — add it to .env at the repo root".into())
-    })?;
+    let missing =
+        |name: &str| Error::Config(format!("{name} is not set — add it to {}", path.display()));
+    let api_key = read("ZOTERO_API_KEY").ok_or_else(|| missing("ZOTERO_API_KEY"))?;
+    let user_id = read("ZOTERO_USER_ID").ok_or_else(|| missing("ZOTERO_USER_ID"))?;
     Ok(Credentials { api_key, user_id })
 }
 
