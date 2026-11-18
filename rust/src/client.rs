@@ -72,6 +72,9 @@ impl ZoteroClient {
         let http = Http::builder()
             .default_headers(headers)
             .timeout(Duration::from_secs(30))
+            // httpx never follows redirects, and reqwest would carry the custom
+            // Zotero-API-Key header to whatever host Location names.
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| Error::Zotero(e.to_string()))?;
         Ok(Self {

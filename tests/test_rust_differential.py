@@ -6,7 +6,7 @@ the Rust binary reaches it through a localhost HTTP bridge that forwards every
 request to the same handler. The test then asserts equal exit codes, stdout,
 stderr, files written, and the sequence of API requests each made.
 
-Skipped when cargo is unavailable; the binary is built once per session.
+Skipped when cargo is unavailable or the build fails; built once per session.
 """
 
 from __future__ import annotations
@@ -41,7 +41,13 @@ def rust_bin() -> Path:
     cargo = shutil.which("cargo") or str(Path.home() / ".cargo/bin/cargo")
     if not Path(cargo).exists():
         pytest.skip("cargo not installed")
-    subprocess.run([cargo, "build", "--quiet"], cwd=CRATE, check=True)
+    # --locked: a test run must never rewrite the tracked Cargo.lock. A toolchain
+    # older than rust-version, or a cold build offline, skips with cargo's reason.
+    build = subprocess.run(
+        [cargo, "build", "--quiet", "--locked"], cwd=CRATE, capture_output=True, text=True
+    )
+    if build.returncode != 0:
+        pytest.skip(f"cargo build failed: {build.stderr.strip()[-500:]}")
     return CRATE / "target" / "debug" / "zel"
 
 
@@ -67,7 +73,7 @@ class Bridge:
                 for name, value in response.headers.items():
                     if name.lower() in ("content-length", "transfer-encoding"):
                         continue
-                    if name.lower() == "link":
+                    if name.lower() in ("link", "location"):
                         value = value.replace(FAKE_ORIGIN, bridge.origin)
                     self.send_header(name, value)
                 self.send_header("Content-Length", str(len(body)))
@@ -81,7 +87,9 @@ class Bridge:
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.origin = f"http://127.0.0.1:{self.server.server_address[1]}"
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        threading.Thread(
+            target=self.server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
+        ).start()
 
     def close(self):
         self.server.shutdown()
@@ -241,6 +249,17 @@ SCENARIOS = {
     "forbidden_leaks_key": lambda: _scripted(
         library_fake(), [httpx.Response(403, text=f"Invalid key {API_KEY} " + "x" * 300)]
     ),
+    # httpx never follows redirects; a client that does would carry the API key
+    # to wherever Location points.
+    "redirect_not_followed": lambda: _scripted(
+        library_fake(),
+        [
+            httpx.Response(
+                302,
+                headers={"Location": f"{FAKE_ORIGIN}/elsewhere", "Last-Modified-Version": "77"},
+            )
+        ],
+    ),
     "backoff_header": lambda: _scripted(
         library_fake(),
         [httpx.Response(200, json=[], headers={"Last-Modified-Version": "77", "Backoff": "0.25"})],
@@ -304,8 +323,17 @@ COMMANDS = [
 ]
 
 
-@pytest.mark.parametrize("scenario", sorted(SCENARIOS))
-@pytest.mark.parametrize("args", COMMANDS, ids=" ".join)
+# Python's audit crashes with a traceback on a 3xx page body, so the redirect
+# scenario compares only `status`, where the 3xx carries a usable version.
+CASES = [
+    pytest.param(scenario, args, id=f"{scenario}-{' '.join(args)}")
+    for scenario in sorted(SCENARIOS)
+    for args in COMMANDS
+    if not (scenario == "redirect_not_followed" and args[0] != "status")
+]
+
+
+@pytest.mark.parametrize(("scenario", "args"), CASES)
 def test_rust_matches_python(rust_bin, tmp_path, monkeypatch, scenario, args):
     py_data, rs_data = tmp_path / "py" / "data", tmp_path / "rs" / "data"
     seed_data_dir(py_data, strays=args[0] == "status")
