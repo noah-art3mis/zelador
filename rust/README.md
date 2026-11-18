@@ -24,14 +24,14 @@ uv run pytest -q tests/test_rust_differential.py   # builds rust/ with cargo fir
 cd rust && cargo test && cargo clippy -- -D warnings
 ```
 
-Against the live library (version 21782), `status --json` and `audit collections` (462 findings) matched byte for byte. The one difference was the repo-root finding below.
+Against a real library of several thousand items, `status --json` and `audit collections` matched byte for byte. The one difference was the repo-root finding below.
 
 ## Findings for the go/no-go decision
 
 1. **Compatible output is a layer of its own.** Agents read `--json` byte for byte, and Rust's defaults differ from Python's: `serde_json` writes `{"a":1}`, Python writes `{"a": 1}`. `src/pyjson.rs` reproduces `json.dumps` (compact and `indent=2`), `repr()`, f-string `str()` and `:g`. `casefold()` comes from `caseless`, `isprintable()` from `unicode-general-category`, and `isoformat()` drops a zero fraction. Every further module will hit more of these. Changing the output contract once, deliberately, would be cheaper than mimicking it forever.
 2. **Config location must be decided first.** Python finds `.env`, `config.yaml` and `taxonomy.yaml` next to its source. The binary uses the checkout it was built from, which a distributed binary would not have. The live run showed this: the binary built in a worktree reported `taxonomy_yaml: false` while Python reported `true`. A full port needs a platform config dir, and Python should move to it too.
 3. **The library mapping in #47 is partly stale.** `serde_yaml` is deprecated on crates.io, so this uses `serde_yaml_ng`. `reqwest` 0.13 puts `RequestBuilder::query` behind a `query` feature, and its default TLS is now rustls, with no system OpenSSL.
-4. **No speed case.** A live `audit collections` used 0.5 s of Python CPU over 7 minutes of wall time. The cost is Zotero rendering bibliographies. Rust's 2m53s run came second and probably hit a warm server cache, so it is not a fair comparison.
+4. **No speed case.** On a real library, `audit collections` spent well under 1% of its wall time on Python CPU; the cost is Zotero rendering bibliographies. A faster Rust run that came second probably hit a warm server cache, so it is not a fair comparison.
 5. **Known unpinned differences.** These are transport-error wording (httpx vs reqwest), Unicode table versions (Python 3.13 vs the crates) for rare characters, and Windows data-dir parity, which is coded to platformdirs' rule but untested.
 
 Still open from #47: a verdict on PDF crate coverage (`compress*.py`, `lookup/fulltext.py`) and the recorded go/no-go decision.
