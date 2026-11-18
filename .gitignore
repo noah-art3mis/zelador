@@ -19,3 +19,9 @@ dist/
 *.egg-info/
 .pytest_cache/
 .ruff_cache/
+
+# rust spike build output
+rust/target/
+
+# gate and check logs
+var/
