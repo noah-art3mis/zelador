@@ -20,6 +20,8 @@ dist/
 .pytest_cache/
 .ruff_cache/
 
-# rust spike
+# rust spike build output
 rust/target/
+
+# gate and check logs
 var/
