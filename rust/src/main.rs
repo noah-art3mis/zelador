@@ -56,10 +56,10 @@ enum Command {
 /// Test seam: the differential test points a debug build at a local fake.
 /// Release builds always talk to the real API.
 fn api_base() -> String {
-    if cfg!(debug_assertions) {
-        if let Ok(base) = env::var("ZELADOR_API_BASE") {
-            return base;
-        }
+    if cfg!(debug_assertions)
+        && let Ok(base) = env::var("ZELADOR_API_BASE")
+    {
+        return base;
     }
     DEFAULT_API_BASE.into()
 }

@@ -2,7 +2,7 @@
 name = "zelador"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 description = "Rust spike of zelador's read-only path (issue #47)"
 publish = false
 

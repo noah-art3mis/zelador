@@ -6,7 +6,7 @@ the Rust binary reaches it through a localhost HTTP bridge that forwards every
 request to the same handler. The test then asserts equal exit codes, stdout,
 stderr, files written, and the sequence of API requests each made.
 
-Skipped when cargo is unavailable or the build fails; built once per session.
+Skipped when cargo is not installed; a failed build fails every case.
 """
 
 from __future__ import annotations
@@ -41,13 +41,14 @@ def rust_bin() -> Path:
     cargo = shutil.which("cargo") or str(Path.home() / ".cargo/bin/cargo")
     if not Path(cargo).exists():
         pytest.skip("cargo not installed")
-    # --locked: a test run must never rewrite the tracked Cargo.lock. A toolchain
-    # older than rust-version, or a cold build offline, skips with cargo's reason.
+    # --locked: a test run must never rewrite the tracked Cargo.lock. Only a
+    # missing toolchain skips; a build failure is a failure, or a compile error
+    # in the crate would turn this whole suite into a green skip.
     build = subprocess.run(
         [cargo, "build", "--quiet", "--locked"], cwd=CRATE, capture_output=True, text=True
     )
     if build.returncode != 0:
-        pytest.skip(f"cargo build failed: {build.stderr.strip()[-500:]}")
+        pytest.fail(f"cargo build failed:\n{build.stderr.strip()[-2000:]}", pytrace=False)
     return CRATE / "target" / "debug" / "zel"
 
 

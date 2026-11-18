@@ -72,8 +72,7 @@ pub fn load_credentials() -> Result<Credentials, Error> {
 /// `$ZELADOR_DATA_DIR`, else the directory platformdirs picks for "zelador".
 pub fn data_dir() -> PathBuf {
     if let Some(dir) = env::var_os("ZELADOR_DATA_DIR").filter(|v| !v.is_empty()) {
-        // Rebuilt from components, as pathlib normalises `./x` and `a//b`.
-        return PathBuf::from(dir).components().collect();
+        return normalise_dir(&dir.to_string_lossy());
     }
     let base = directories::BaseDirs::new().expect("a home directory");
     if cfg!(windows) {
@@ -81,6 +80,20 @@ pub fn data_dir() -> PathBuf {
         base.data_local_dir().join("zelador").join("zelador")
     } else {
         base.data_dir().join("zelador")
+    }
+}
+
+/// pathlib's normalisation: drop `.` components and doubled or trailing
+/// slashes, keeping `.` itself when nothing else is left.
+fn normalise_dir(raw: &str) -> PathBuf {
+    let path: PathBuf = Path::new(raw)
+        .components()
+        .filter(|c| !matches!(c, std::path::Component::CurDir))
+        .collect();
+    if path.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        path
     }
 }
 
@@ -138,8 +151,8 @@ pub fn load_config(path: &Path) -> Result<Config, Error> {
     };
     let style = map
         .get("style")
+        .filter(|v| !is_falsy(v))
         .map(yaml_str)
-        .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "apa".into());
     Ok(Config {
         citekey_sources,
@@ -196,6 +209,31 @@ mod tests {
     fn falsy_document_means_defaults_like_python() {
         for text in ["false\n", "0\n", ""] {
             assert_eq!(load(text).unwrap().style, "apa", "{text:?}");
+        }
+    }
+
+    #[test]
+    fn falsy_style_means_apa_like_python() {
+        for value in ["false", "0", "\"\"", "null"] {
+            assert_eq!(
+                load(&format!("style: {value}\n")).unwrap().style,
+                "apa",
+                "{value}"
+            );
+        }
+        assert_eq!(load("style: chicago\n").unwrap().style, "chicago");
+    }
+
+    #[test]
+    fn data_dir_override_normalises_like_pathlib() {
+        for (raw, expected) in [
+            ("./x", "x"),
+            (".", "."),
+            ("./", "."),
+            ("x//y/", "x/y"),
+            ("/a/./b/", "/a/b"),
+        ] {
+            assert_eq!(normalise_dir(raw), PathBuf::from(expected), "{raw}");
         }
     }
 
