@@ -11,7 +11,6 @@ import platformdirs
 import yaml
 from dotenv import load_dotenv
 
-REPO_ROOT = Path(__file__).resolve().parent.parent  # the shipped *.example.yaml templates
 WINDOWS_USERS_ROOT = Path("/mnt/c/Users")
 
 DATA_SUBDIRS = ("backups", "audit", "changesets", "plans", "cache", "log", "compress")

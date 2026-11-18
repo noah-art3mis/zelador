@@ -116,11 +116,7 @@ def audit(
     """
     with guard():
         cfg = config.load_config()
-        registry = (
-            taxonomy_mod.load_taxonomy()
-            if config.taxonomy_file().exists()
-            else None
-        )
+        registry = taxonomy_mod.load_taxonomy() if config.taxonomy_file().exists() else None
         client = make_client()
         try:
             summary = audit_runner.run_audit(

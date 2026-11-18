@@ -1,6 +1,7 @@
 """Tests for zelador.config — env credentials, data dir, config.yaml, Zotero dir discovery."""
 
-from pathlib import Path
+import re
+import sys
 
 import pytest
 
@@ -33,11 +34,18 @@ class TestConfigDir:
         monkeypatch.setenv("ZELADOR_CONFIG_DIR", str(tmp_path / "cfg"))
         assert config.config_dir() == tmp_path / "cfg"
 
-    def test_defaults_to_platform_config_dir(self, monkeypatch):
-        import platformdirs
-
+    @pytest.mark.skipif(sys.platform == "win32", reason="XDG rule applies on Linux and macOS")
+    def test_xdg_config_home_wins_stripped(self, monkeypatch, tmp_path):
         monkeypatch.delenv("ZELADOR_CONFIG_DIR", raising=False)
-        assert config.config_dir() == Path(platformdirs.user_config_dir("zelador"))
+        monkeypatch.setenv("XDG_CONFIG_HOME", f"  {tmp_path}/xdg  ")
+        assert config.config_dir() == tmp_path / "xdg" / "zelador"
+
+    @pytest.mark.skipif(sys.platform != "linux", reason="~/.config is the Linux default")
+    def test_defaults_to_dot_config_on_linux(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("ZELADOR_CONFIG_DIR", raising=False)
+        monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        assert config.config_dir() == tmp_path / ".config" / "zelador"
 
     def test_config_files_live_in_the_config_dir(self, isolated_config_dir):
         assert config.env_file() == isolated_config_dir / ".env"
@@ -54,7 +62,7 @@ class TestConfigDir:
 
     def test_missing_credentials_name_the_config_dir_env(self, monkeypatch, isolated_config_dir):
         monkeypatch.delenv("ZOTERO_API_KEY", raising=False)
-        with pytest.raises(config.ConfigError, match=str(isolated_config_dir / ".env")):
+        with pytest.raises(config.ConfigError, match=re.escape(str(isolated_config_dir / ".env"))):
             config.load_credentials()
 
     def test_load_config_reads_config_dir_by_default(self, isolated_config_dir):
