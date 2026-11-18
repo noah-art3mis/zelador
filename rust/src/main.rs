@@ -25,7 +25,8 @@ use config::Error;
 )]
 struct Cli {
     /// Trace each API request on stderr.
-    #[arg(long, global = true)]
+    /// Must precede the command, as in the Python CLI.
+    #[arg(long)]
     verbose: bool,
     #[command(subcommand)]
     command: Command,
@@ -44,7 +45,7 @@ enum Command {
         /// The check to run (the spike ports: tags, collections).
         check: Option<String>,
         /// Scope findings to items changed after this library version.
-        #[arg(long)]
+        #[arg(long, allow_negative_numbers = true)]
         since: Option<i64>,
         /// Summary object.
         #[arg(long = "json")]
@@ -52,9 +53,15 @@ enum Command {
     },
 }
 
-/// Test seam: the differential test points the binary at a local fake.
+/// Test seam: the differential test points a debug build at a local fake.
+/// Release builds always talk to the real API.
 fn api_base() -> String {
-    env::var("ZELADOR_API_BASE").unwrap_or_else(|_| DEFAULT_API_BASE.into())
+    if cfg!(debug_assertions) {
+        if let Ok(base) = env::var("ZELADOR_API_BASE") {
+            return base;
+        }
+    }
+    DEFAULT_API_BASE.into()
 }
 
 fn make_client(verbose: bool) -> Result<ZoteroClient, Error> {

@@ -72,7 +72,8 @@ pub fn load_credentials() -> Result<Credentials, Error> {
 /// `$ZELADOR_DATA_DIR`, else the directory platformdirs picks for "zelador".
 pub fn data_dir() -> PathBuf {
     if let Some(dir) = env::var_os("ZELADOR_DATA_DIR").filter(|v| !v.is_empty()) {
-        return PathBuf::from(dir);
+        // Rebuilt from components, as pathlib normalises `./x` and `a//b`.
+        return PathBuf::from(dir).components().collect();
     }
     let base = directories::BaseDirs::new().expect("a home directory");
     if cfg!(windows) {
@@ -101,7 +102,7 @@ pub fn load_config(path: &Path) -> Result<Config, Error> {
     let raw: serde_yaml_ng::Value = serde_yaml_ng::from_str(&text)
         .map_err(|e| Error::Config(format!("{}: {e}", path.display())))?;
     let map = match raw {
-        serde_yaml_ng::Value::Null => return Ok(defaults),
+        raw if is_falsy(&raw) => return Ok(defaults),
         serde_yaml_ng::Value::Mapping(map) => map,
         _ => {
             return Err(Error::Config(format!(
@@ -125,7 +126,8 @@ pub fn load_config(path: &Path) -> Result<Config, Error> {
         )));
     }
     let citekey_sources = match map.get("citekey_sources") {
-        None | Some(serde_yaml_ng::Value::Null) => vec![],
+        None => vec![],
+        Some(value) if is_falsy(value) => vec![],
         Some(serde_yaml_ng::Value::Sequence(seq)) => seq.iter().map(yaml_str).collect(),
         Some(_) => {
             return Err(Error::Config(format!(
@@ -145,11 +147,60 @@ pub fn load_config(path: &Path) -> Result<Config, Error> {
     })
 }
 
+/// Python truthiness of a parsed YAML value (`raw or {}`, `sources or []`).
+fn is_falsy(value: &serde_yaml_ng::Value) -> bool {
+    use serde_yaml_ng::Value as Y;
+    match value {
+        Y::Null => true,
+        Y::Bool(b) => !b,
+        Y::Number(n) => n.as_f64() == Some(0.0),
+        Y::String(s) => s.is_empty(),
+        Y::Sequence(seq) => seq.is_empty(),
+        Y::Mapping(map) => map.is_empty(),
+        _ => false,
+    }
+}
+
 fn yaml_str(value: &serde_yaml_ng::Value) -> String {
     match value {
         serde_yaml_ng::Value::String(s) => s.clone(),
         serde_yaml_ng::Value::Number(n) => n.to_string(),
         serde_yaml_ng::Value::Bool(b) => if *b { "True" } else { "False" }.into(),
         _ => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn load(text: &str) -> Result<Config, Error> {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = env::temp_dir().join(format!("zel-config-{}-{n}.yaml", std::process::id()));
+        fs::write(&path, text).unwrap();
+        let result = load_config(&path);
+        fs::remove_file(&path).unwrap();
+        result
+    }
+
+    #[test]
+    fn falsy_citekey_sources_mean_none_like_python() {
+        for value in ["\"\"", "{}", "false", "0", "[]", "null"] {
+            let cfg = load(&format!("citekey_sources: {value}\n")).unwrap();
+            assert!(cfg.citekey_sources.is_empty(), "{value}");
+        }
+    }
+
+    #[test]
+    fn falsy_document_means_defaults_like_python() {
+        for text in ["false\n", "0\n", ""] {
+            assert_eq!(load(text).unwrap().style, "apa", "{text:?}");
+        }
+    }
+
+    #[test]
+    fn non_list_citekey_sources_still_refused() {
+        assert!(load("citekey_sources: notes/*.md\n").is_err());
     }
 }
