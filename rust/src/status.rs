@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
 
+use crate::backup::parse_line;
 use crate::config::{Config, Error, config_file, taxonomy_file};
 use crate::pyjson::py_str;
 
@@ -31,10 +32,6 @@ pub fn stem(path: &Path) -> String {
     path.file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default()
-}
-
-fn parse_line(path: &Path, raw: &str) -> Result<Value, Error> {
-    serde_json::from_str(raw).map_err(|e| Error::Config(format!("{}: {e}", path.display())))
 }
 
 // -- backups -------------------------------------------------------------------

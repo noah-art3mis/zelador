@@ -8,7 +8,6 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use chrono::Utc;
 use serde_json::{Map, Value, json};
 
 use crate::client::{ItemsQuery, ZoteroClient};
@@ -55,7 +54,7 @@ pub fn finding(
 
 /// `datetime.now(UTC).isoformat()` – the fraction is omitted when it is zero.
 fn now_iso() -> String {
-    let now = Utc::now();
+    let now = crate::clock::now();
     let base = now.format("%Y-%m-%dT%H:%M:%S");
     match now.timestamp_subsec_micros() {
         0 => format!("{base}+00:00"),

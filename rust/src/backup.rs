@@ -4,10 +4,10 @@
 //! because plans pin themselves to a backup id and restore reads objects back.
 
 use std::collections::HashSet;
-use std::fs;
+use std::fs::{self, File};
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
-use chrono::Utc;
 use serde_json::{Value, json};
 
 use crate::client::{ItemsQuery, ZoteroClient};
@@ -27,17 +27,19 @@ pub struct BackupStats {
     pub tags: usize,
 }
 
-fn parse_line(path: &Path, raw: &str) -> Result<Value, Error> {
+pub fn parse_line(path: &Path, raw: &str) -> Result<Value, Error> {
     serde_json::from_str(raw).map_err(|e| Error::Config(format!("{}: {e}", path.display())))
 }
 
-/// The newest backup's identity, read from its filename order and header line.
+/// The newest backup's identity, read from its filename order and its header
+/// line alone – never the whole file, which can run to tens of megabytes.
 pub fn latest_backup(backups_dir: &Path) -> Result<Option<BackupInfo>, Error> {
     let Some(path) = sorted_glob(backups_dir, ".jsonl")?.pop() else {
         return Ok(None);
     };
-    let text = fs::read_to_string(&path)?;
-    let header = parse_line(&path, text.split_inclusive('\n').next().unwrap_or(""))?;
+    let mut first = String::new();
+    BufReader::new(File::open(&path)?).read_line(&mut first)?;
+    let header = parse_line(&path, &first)?;
     Ok(Some(BackupInfo {
         timestamp: header["timestamp"].clone(),
         library_version: header["library_version"].clone(),
@@ -45,13 +47,12 @@ pub fn latest_backup(backups_dir: &Path) -> Result<Option<BackupInfo>, Error> {
     }))
 }
 
-/// Item, collection and distinct-tag counts from one backup file.
+/// Item, collection and distinct-tag counts from one backup file, streamed.
 pub fn backup_stats(path: &Path) -> Result<BackupStats, Error> {
-    let text = fs::read_to_string(path)?;
     let (mut items, mut collections) = (0, 0);
     let mut tags = HashSet::new();
-    for raw in text.split_inclusive('\n') {
-        let line = parse_line(path, raw)?;
+    for raw in BufReader::new(File::open(path)?).lines() {
+        let line = parse_line(path, &raw?)?;
         match line["kind"].as_str() {
             Some("item") => {
                 items += 1;
@@ -75,7 +76,11 @@ pub fn run_backup(client: &mut ZoteroClient, backups_dir: &Path) -> Result<Optio
     let previous = latest_backup(backups_dir)?;
     let Some(items) = client.all_items(ItemsQuery {
         include_trashed: true,
-        if_modified_since: previous.and_then(|p| p.library_version.as_i64()),
+        // str(previous.library_version), as Python sends it; null sends no header.
+        if_modified_since: previous
+            .map(|p| p.library_version)
+            .filter(|v| !v.is_null())
+            .map(|v| crate::pyjson::py_str(&v)),
         ..Default::default()
     })?
     else {
@@ -85,7 +90,7 @@ pub fn run_backup(client: &mut ZoteroClient, backups_dir: &Path) -> Result<Optio
     let collections = client.all_collections()?;
     let tag_colors = client.setting("tagColors")?;
 
-    let stamp = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
+    let stamp = crate::clock::now().format("%Y%m%dT%H%M%SZ").to_string();
     let path = backups_dir.join(format!("{stamp}.jsonl"));
     let mut lines = vec![json!({"kind": "header", "library_version": version, "timestamp": stamp})];
     lines.extend(
@@ -101,8 +106,9 @@ pub fn run_backup(client: &mut ZoteroClient, backups_dir: &Path) -> Result<Optio
     if let Some(setting) = tag_colors {
         lines.push(json!({"kind": "setting", "name": "tagColors", "object": setting}));
     }
-    // Written aside and renamed into place, so a crash never leaves a torn backup
-    // that latest_backup would pick up.
+    // Written aside and renamed into place, so a crashed process never leaves a
+    // torn backup for latest_backup to pick up. Like Python, there is no fsync:
+    // a power loss can still leave a partial file on some filesystems.
     let tmp = path.with_extension("tmp");
     fs::write(
         &tmp,

@@ -13,10 +13,10 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 import subprocess
 import threading
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qsl, urlparse
@@ -33,16 +33,29 @@ from zelador.config import Credentials
 API_KEY = "sekrit-key-123"
 CRATE = REPO_ROOT / "rust"
 FAKE_ORIGIN = "https://api.zotero.org"
-TIMESTAMP = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d{6})?\+00:00")
-# Backup ids: the seeded ones keep their names, a fresh one becomes <stamp>.
-STAMP = re.compile(r"\d{8}T\d{6}Z")
-SEEDED_STAMPS = {"20261001T000000Z", "20261101T120000Z"}
+# Both implementations run with the clock frozen at one instant, so timestamps,
+# backup ids and plan ids compare exactly. The zero-microsecond instant pins
+# isoformat() dropping the fraction.
+INSTANTS = {
+    "default": datetime(2026, 11, 18, 12, 34, 56, 789012, tzinfo=UTC),
+    "configured": datetime(2026, 11, 18, 12, 34, 56, tzinfo=UTC),
+}
+CLOCK_MODULES = (
+    "zelador.backup",
+    "zelador.audit.runner",
+    "zelador.cli_change",
+    "zelador.cli_compress",
+)
 
 
-def scrub(text: str) -> str:
-    """Erase what the clock decides: ISO timestamps and new backup ids."""
-    text = TIMESTAMP.sub("<now>", text)
-    return STAMP.sub(lambda m: m[0] if m[0] in SEEDED_STAMPS else "<stamp>", text)
+def freeze_python_clock(monkeypatch, instant: datetime) -> None:
+    class Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return instant if tz is not None else instant.replace(tzinfo=None)
+
+    for name in CLOCK_MODULES:
+        monkeypatch.setattr(f"{name}.datetime", Frozen)
 
 
 @pytest.fixture(scope="session")
@@ -122,11 +135,7 @@ def request_log(fake: FakeZotero) -> list[tuple]:
 
 
 def snapshot(root: Path) -> dict[str, str]:
-    return {
-        scrub(str(p.relative_to(root))): scrub(p.read_text())
-        for p in sorted(root.rglob("*"))
-        if p.is_file()
-    }
+    return {str(p.relative_to(root)): p.read_text() for p in sorted(root.rglob("*")) if p.is_file()}
 
 
 def seed_data_dir(root: Path, strays: bool) -> None:
@@ -188,7 +197,15 @@ def seed_data_dir(root: Path, strays: bool) -> None:
 
 def library_fake() -> FakeZotero:
     items = [
-        make_item("ITEM0001", version=5, collections=["COLL0001"], title="Filed"),
+        make_item(
+            "ITEM0001",
+            version=5,
+            collections=["COLL0001"],
+            title="Filed",
+            # Numbers whose JSON text Rust must reproduce exactly as Python does.
+            numbers={"small": 1.5e-07, "big": 123456789012345678901234, "negzero": -0.0},
+            nothing=None,
+        ),
         make_item("ITEM0002", version=50, title="Ünfiled: l'été"),
         make_item("ITEM0003", version=3, item_type="note"),
         make_item("ITEM0004", version=4, item_type="book", title="Old unfiled"),
@@ -265,8 +282,27 @@ def unchanged_since_backup() -> FakeZotero:
     return fake
 
 
+def foreign_number_text() -> FakeZotero:
+    """The real API is not Python: its number text (0.00001, 1E5, -0, 1.50) is not
+    what json.dumps would write, so Rust must re-render it, not copy it."""
+    item = make_item("ITEM0099", version=60, collections=["COLL0001"], numbers="@N@")
+    raw = json.dumps([item]).replace(
+        '"@N@"', '{"tiny": 0.00001, "upper": 1E5, "negzero": -0, "padded": 1.50}'
+    )
+    fake = library_fake()
+    fake.script.append(
+        httpx.Response(
+            200,
+            content=raw.encode(),
+            headers={"Content-Type": "application/json", "Last-Modified-Version": "77"},
+        )
+    )
+    return fake
+
+
 SCENARIOS = {
     "healthy": library_fake,
+    "foreign_number_text": foreign_number_text,
     "unchanged_since_backup": unchanged_since_backup,
     "configured": library_fake,  # plus seed_config_dir before both runs
     "tags_need_probe": many_tags_probed,
@@ -299,8 +335,11 @@ def _scripted(fake: FakeZotero, responses: list[httpx.Response]) -> FakeZotero:
     return fake
 
 
-def run_python(args: list[str], fake: FakeZotero, data: Path, monkeypatch) -> dict:
+def run_python(
+    args: list[str], fake: FakeZotero, data: Path, monkeypatch, instant: datetime
+) -> dict:
     monkeypatch.setenv("ZELADOR_DATA_DIR", str(data))
+    freeze_python_clock(monkeypatch, instant)
     creds = Credentials(api_key=API_KEY, user_id=USER_ID)
     monkeypatch.setattr(
         cli,
@@ -311,13 +350,16 @@ def run_python(args: list[str], fake: FakeZotero, data: Path, monkeypatch) -> di
     return {"exit": result.exit_code, "stdout": result.stdout, "stderr": result.stderr}
 
 
-def run_rust(binary: Path, args: list[str], fake: FakeZotero, data: Path) -> dict:
+def run_rust(
+    binary: Path, args: list[str], fake: FakeZotero, data: Path, instant: datetime
+) -> dict:
     bridge = Bridge(fake)
     env = {
         "PATH": os.environ["PATH"],
         "HOME": str(data.parent),
         "ZELADOR_DATA_DIR": str(data),
         "ZELADOR_API_BASE": bridge.origin,
+        "ZELADOR_NOW": instant.isoformat(),
         "ZELADOR_CONFIG_DIR": os.environ["ZELADOR_CONFIG_DIR"],  # conftest's per-test dir
         "ZOTERO_API_KEY": API_KEY,
         "ZOTERO_USER_ID": USER_ID,
@@ -333,8 +375,7 @@ def run_rust(binary: Path, args: list[str], fake: FakeZotero, data: Path) -> dic
 
 def normalise(result: dict, data: Path) -> dict:
     return {
-        k: scrub(v.replace(str(data), "<data>")) if isinstance(v, str) else v
-        for k, v in result.items()
+        k: v.replace(str(data), "<data>") if isinstance(v, str) else v for k, v in result.items()
     }
 
 
@@ -372,8 +413,9 @@ def test_rust_matches_python(rust_bin, tmp_path, monkeypatch, isolated_config_di
         seed_config_dir(isolated_config_dir)
     py_fake, rs_fake = SCENARIOS[scenario](), SCENARIOS[scenario]()
 
-    expected = normalise(run_python(args, py_fake, py_data, monkeypatch), py_data)
-    actual = normalise(run_rust(rust_bin, args, rs_fake, rs_data), rs_data)
+    instant = INSTANTS.get(scenario, INSTANTS["default"])
+    expected = normalise(run_python(args, py_fake, py_data, monkeypatch, instant), py_data)
+    actual = normalise(run_rust(rust_bin, args, rs_fake, rs_data, instant), rs_data)
 
     assert actual == expected
     assert snapshot(rs_data) == snapshot(py_data)

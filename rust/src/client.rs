@@ -58,7 +58,7 @@ pub struct ItemsQuery<'a> {
     pub include_trashed: bool,
     pub include: &'a str,
     pub style: &'a str,
-    pub if_modified_since: Option<i64>,
+    pub if_modified_since: Option<String>,
 }
 
 pub struct ZoteroClient {
@@ -264,7 +264,7 @@ impl ZoteroClient {
         }
         let headers = query
             .if_modified_since
-            .map(|v| vec![("If-Modified-Since-Version", v.to_string())])
+            .map(|v| vec![("If-Modified-Since-Version", v)])
             .unwrap_or_default();
         let path = format!("{}/items", self.prefix);
         self.paginated(&path, params, headers)

@@ -6,6 +6,7 @@
 mod audit;
 mod backup;
 mod client;
+mod clock;
 mod config;
 mod pyjson;
 mod status;
