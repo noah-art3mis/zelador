@@ -173,6 +173,61 @@ pub fn py_repr_value(value: &Value) -> String {
     }
 }
 
+/// Python's `==` on parsed JSON: dicts compare without regard to key order,
+/// numbers by value (`1 == 1.0`), and `True`/`False` equal `1`/`0`.
+pub fn py_eq(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Array(x), Value::Array(y)) => {
+            x.len() == y.len() && x.iter().zip(y).all(|(p, q)| py_eq(p, q))
+        }
+        (Value::Object(x), Value::Object(y)) => {
+            x.len() == y.len() && x.iter().all(|(k, v)| y.get(k).is_some_and(|w| py_eq(v, w)))
+        }
+        (Value::Number(_) | Value::Bool(_), Value::Number(_) | Value::Bool(_)) => {
+            match (as_int(a), as_int(b)) {
+                (Some(x), Some(y)) => x == y,
+                _ => as_float(a) == as_float(b),
+            }
+        }
+        _ => a == b,
+    }
+}
+
+/// The integer text of an int or bool, normalised like `py_number`.
+fn as_int(value: &Value) -> Option<String> {
+    match value {
+        Value::Bool(b) => Some(if *b { "1" } else { "0" }.into()),
+        Value::Number(n) if !n.as_str().contains(['.', 'e', 'E']) => Some(py_number(n)),
+        _ => None,
+    }
+}
+
+fn as_float(value: &Value) -> Option<f64> {
+    match value {
+        Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+        Value::Number(n) => n.as_str().parse().ok(),
+        _ => None,
+    }
+}
+
+/// Python truthiness of a parsed JSON value.
+pub fn py_truthy(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(b) => *b,
+        Value::Number(n) => n.as_str().parse::<f64>().is_ok_and(|f| f != 0.0),
+        Value::String(s) => !s.is_empty(),
+        Value::Array(items) => !items.is_empty(),
+        Value::Object(map) => !map.is_empty(),
+    }
+}
+
+/// The text a `re.match(r"^...$", s)` pattern must cover: Python's `$` also
+/// matches just before one trailing newline, so `"slug\n"` passes `^[a-z]+$`.
+pub fn re_dollar_body(s: &str) -> &str {
+    s.strip_suffix('\n').unwrap_or(s)
+}
+
 /// Python's `repr(str)`: prefer single quotes, switch to double quotes when the
 /// text holds a single quote and no double quote, escape non-printables.
 pub fn py_repr(s: &str) -> String {
@@ -337,6 +392,22 @@ mod tests {
         let value: Value = serde_json::from_str(r#"["rui's", {"a": null}]"#).unwrap();
         assert_eq!(py_str(&value), r#"["rui's", {'a': None}]"#);
         assert_eq!(py_str(&Value::String("rui's".into())), "rui's");
+    }
+
+    #[test]
+    fn equality_follows_python() {
+        let parse = |t: &str| serde_json::from_str::<Value>(t).unwrap();
+        assert!(py_eq(
+            &parse(r#"{"a": 1, "b": [true]}"#),
+            &parse(r#"{"b": [1.0], "a": 1}"#)
+        ));
+        assert!(py_eq(&parse("-0"), &parse("0.0")));
+        assert!(!py_eq(
+            &parse(r#"[{"a": 1}]"#),
+            &parse(r#"[{"a": 1, "b": 2}]"#)
+        ));
+        assert!(!py_eq(&parse("null"), &parse("false")));
+        assert!(!py_eq(&parse(r#""1""#), &parse("1")));
     }
 
     #[test]

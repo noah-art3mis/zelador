@@ -11,12 +11,15 @@ pub enum Error {
     Config(String),
     Zotero(String),
     BadInput(String),
+    /// Already reported on stderr; exit with this code and print nothing more.
+    Exit(u8),
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::Config(m) | Error::Zotero(m) | Error::BadInput(m) => f.write_str(m),
+            Error::Exit(code) => write!(f, "exit {code}"),
         }
     }
 }
@@ -99,7 +102,7 @@ pub fn data_dir() -> PathBuf {
 
 /// pathlib's normalisation: drop `.` components and doubled or trailing
 /// slashes, keeping `.` itself when nothing else is left.
-fn normalise_dir(raw: &str) -> PathBuf {
+pub fn normalise_dir(raw: &str) -> PathBuf {
     let path: PathBuf = Path::new(raw)
         .components()
         .filter(|c| !matches!(c, std::path::Component::CurDir))

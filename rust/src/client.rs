@@ -4,6 +4,7 @@
 //! the metadata lies, Backoff/Retry-After honoured, 429/503 retries, explicit
 //! timeouts, user-scoped endpoints, API-key redaction on every error path.
 
+use std::collections::{HashMap, HashSet};
 use std::thread;
 use std::time::Duration;
 
@@ -68,6 +69,8 @@ pub struct ZoteroClient {
     prefix: String,
     trace: bool,
     pending_backoff: f64,
+    field_cache: HashMap<String, HashSet<String>>,
+    creator_cache: HashMap<String, HashSet<String>>,
     pub last_modified_version: Option<i64>,
 }
 
@@ -93,6 +96,8 @@ impl ZoteroClient {
             prefix: format!("/users/{}", creds.user_id),
             trace,
             pending_backoff: 0.0,
+            field_cache: HashMap::new(),
+            creator_cache: HashMap::new(),
             last_modified_version: None,
         })
     }
@@ -294,6 +299,49 @@ impl ZoteroClient {
         Ok(self
             .paginated(&path, Vec::new(), Vec::new())?
             .unwrap_or_default())
+    }
+
+    /// Valid data fields for an item type (/itemTypeFields), cached per session.
+    pub fn item_type_fields(&mut self, item_type: &str) -> Result<HashSet<String>, Error> {
+        self.schema_set("/itemTypeFields", "field", item_type)
+    }
+
+    /// Valid creator types for an item type (/itemTypeCreatorTypes), cached per session.
+    pub fn item_type_creator_types(&mut self, item_type: &str) -> Result<HashSet<String>, Error> {
+        self.schema_set("/itemTypeCreatorTypes", "creatorType", item_type)
+    }
+
+    /// One schema endpoint's names for an item type; a failed lookup is not
+    /// cached, so asking again asks the server again, as in Python.
+    fn schema_set(
+        &mut self,
+        path: &str,
+        name: &str,
+        item_type: &str,
+    ) -> Result<HashSet<String>, Error> {
+        let cache = if name == "field" {
+            &self.field_cache
+        } else {
+            &self.creator_cache
+        };
+        if let Some(found) = cache.get(item_type) {
+            return Ok(found.clone());
+        }
+        let reply = self.get(path, &vec![("itemType".into(), item_type.into())])?;
+        let entries: Vec<Value> = serde_json::from_str(&reply.body).map_err(|e| {
+            Error::Zotero(self.redact(&format!("GET {path} returned invalid JSON: {e}")))
+        })?;
+        let names: HashSet<String> = entries
+            .iter()
+            .filter_map(|entry| entry[name].as_str().map(String::from))
+            .collect();
+        let cache = if name == "field" {
+            &mut self.field_cache
+        } else {
+            &mut self.creator_cache
+        };
+        cache.insert(item_type.to_string(), names.clone());
+        Ok(names)
     }
 
     /// Current library version in one cheap request.
