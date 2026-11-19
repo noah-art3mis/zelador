@@ -866,6 +866,144 @@ def test_rust_validate_matches_python(
         )
 
 
+ADD_STATUS_READ = cs({"op": "add_tag", "tag": "status:read", "keys": ["JOUR0002"]})
+TWO_STATUSES = "tags:\n  - {tag: status:read}\n  - {tag: status:to-read}\n"
+
+# YAML the port cannot be sure it reads as PyYAML does. Each entry: the
+# registry, the changeset, Python's exit code (pinned, so a case documents a
+# real divergence), and the reason Rust gives as it refuses with exit 1 before
+# any request. Fixes may only turn a Rust plan into a refusal, never the reverse.
+FAIL_CLOSED = {
+    # Explicit tags: serde_yaml_ng resolves !!str and friends out of sight.
+    "str_tag_flag": (
+        "families:\n  status: {exclusive: !!str no}\n" + TWO_STATUSES,
+        ADD_STATUS_READ,
+        2,
+        "YAML tags are not supported here: '!!str'",
+    ),
+    "str_tag_zero": (
+        "families:\n  status: {exclusive: !!str 0}\n" + TWO_STATUSES,
+        ADD_STATUS_READ,
+        2,
+        "YAML tags are not supported here: '!!str'",
+    ),
+    "verbatim_tag": (
+        "families:\n  status: {exclusive: !<tag:yaml.org,2002:str> no}\n" + TWO_STATUSES,
+        ADD_STATUS_READ,
+        2,
+        "YAML tags are not supported here: '!<tag:yaml.org,2002:str>'",
+    ),
+    "anchored_tag": (
+        "x: &a !!str no\nfamilies:\n  status: {exclusive: *a}\n" + TWO_STATUSES,
+        ADD_STATUS_READ,
+        2,
+        "YAML tags are not supported here: '!!str'",
+    ),
+    "tagged_merge_key": (
+        "a: &a {exclusive: yes}\nfamilies:\n  status: {!!str <<: *a}\n" + TWO_STATUSES,
+        ADD_STATUS_READ,
+        1,
+        "YAML tags are not supported here: '!!str'",
+    ),
+    "set_tag": (
+        "families: !!set {status}\ntags: []\n",
+        TRIVIAL,
+        1,
+        "YAML tags are not supported here: '!!set'",
+    ),
+    "tag_python_accepts": (
+        "families:\n  status: {coloured: !!str no}\n"
+        + "tags:\n  - {tag: status:read, colour: '#009E73'}\n",
+        TRIVIAL,
+        0,
+        "YAML tags are not supported here: '!!str'",
+    ),
+    "tag_directive": (
+        "%TAG !e! tag:example.com,2000:\n---\nfamilies:\n  status: {}\ntags: []\n",
+        TRIVIAL,
+        0,
+        "YAML tags are not supported here: '%TAG'",
+    ),
+    # Tabs: PyYAML's scanner refuses them in most positions.
+    "tab_after_colon": (
+        "families:\n  status: {exclusive:\tno}\n" + TWO_STATUSES,
+        ADD_STATUS_READ,
+        1,
+        "tab characters are not supported here — indent and separate with spaces",
+    ),
+    "tab_after_value": (
+        "families:\n  status:\n    exclusive: yes\t\n" + TWO_STATUSES,
+        ADD_STATUS_READ,
+        1,
+        "tab characters are not supported here — indent and separate with spaces",
+    ),
+    "tab_before_comment": (
+        "families: {status: {}}\ntags: []\t# c\n",
+        TRIVIAL,
+        1,
+        "tab characters are not supported here — indent and separate with spaces",
+    ),
+    "tab_before_flow": (
+        "families:\n  status: {}\ntags:\t[]\n",
+        TRIVIAL,
+        1,
+        "tab characters are not supported here — indent and separate with spaces",
+    ),
+    # Spellings YAML 1.2 reads as numbers and PyYAML as text: serde_yaml_ng
+    # hands over 0 for each, and a flag flips.
+    **{
+        f"number_{spelling}": (
+            f"families:\n  status: {{exclusive: {spelling}}}\n" + TWO_STATUSES,
+            ADD_STATUS_READ,
+            2,
+            f"'{spelling}' is a number to this port but text to PyYAML — quote it",
+        )
+        for spelling in ["0o0", "0e0", "0.0e0", "-.0", "+.0", "0e+0"]
+    },
+    "number_family_name": (
+        "families:\n  1e3: {}\ntags:\n  - tag: 1e3:x\n",
+        TRIVIAL,
+        0,
+        "'1e3' is a number to this port but text to PyYAML — quote it",
+    ),
+    # A timestamp folded over two lines reaches the loader as plain text.
+    "folded_timestamp": (
+        "families:\n  topic: {}\ntags:\n  - tag: topic:ai\n    aliases:\n"
+        "      - 2001-12-14\n        21:59:43.10\n",
+        cs({"op": "add_tag", "tag": "2001-12-14 21:59:43.10", "keys": ["JOUR0002"]}),
+        2,
+        "'2001-12-14' is a date to PyYAML — quote it to keep it as text",
+    ),
+}
+
+
+@pytest.mark.parametrize("name", sorted(FAIL_CLOSED))
+def test_rust_refuses_yaml_it_cannot_read_as_pyyaml(
+    rust_bin, tmp_path, monkeypatch, isolated_config_dir, test_tz, name
+):
+    registry, changeset, python_exit, reason = FAIL_CLOSED[name]
+    isolated_config_dir.mkdir(parents=True)
+    (isolated_config_dir / "taxonomy.yaml").write_text(registry)
+    outcomes = {}
+    for side in ("py", "rs"):
+        data = tmp_path / side / "data"
+        seed_backup(data, "20261101T120000Z")
+        write_changeset_file(data, name, changeset)
+        args = ["validate", f"{data}/changesets/{name}.json"]
+        fake = validate_fake()
+        if side == "py":
+            result = run_python(args, fake, data, monkeypatch, INSTANTS["default"])
+        else:
+            result = run_rust(rust_bin, args, fake, data, INSTANTS["default"])
+        plans = [f for f in snapshot(data) if f.startswith("plans/")]
+        outcomes[side] = (result, plans, fake.requests)
+    py, py_plans, _ = outcomes["py"]
+    rs, rs_plans, rs_requests = outcomes["rs"]
+    assert py["exit"] == python_exit
+    assert (rs["exit"], rs["stdout"], rs_plans, rs_requests) == (1, "", [], [])
+    assert rs["stderr"] == f"error: {isolated_config_dir}/taxonomy.yaml: {reason}\n"
+
+
 TOO_DEEP = {
     # One level past the limit: refused with CPython-style position text.
     "one_too_deep": (

@@ -233,6 +233,10 @@ mod tests {
         let cfg = load("base: &b {style: mla}\n").err().unwrap().to_string();
         assert!(cfg.contains("unknown config key(s)"), "{cfg}");
         assert!(load("<<: {style: mla}\n").is_ok_and(|c| c.style == "mla"));
+        // What the loader cannot read as PyYAML does is refused, not guessed.
+        for text in ["style: !!str no\n", "style:\tmla\n", "style: 0o0\n"] {
+            assert!(load(text).is_err(), "{text:?}");
+        }
     }
 
     #[test]

@@ -22,7 +22,7 @@ use std::fmt;
 use serde::de::{DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde_json::{Number, Value};
 
-use crate::pyjson::{py_eq, py_str};
+use crate::pyjson::{py_eq, py_repr, py_str};
 
 /// A parsed YAML node as Python holds it. Mapping keys keep their type, so a
 /// message can show `family 12` rather than `family '12'`.
@@ -68,10 +68,144 @@ pub fn load(text: &str) -> Result<Py, String> {
     if blank {
         return Ok(Py::Scalar(Value::Null));
     }
+    guard(text)?;
     let raw = Seed { src: text }
         .deserialize(serde_yaml_ng::Deserializer::from_str(text))
         .map_err(|e| e.to_string())?;
     resolve(raw)
+}
+
+const TABS: &str = "tab characters are not supported here — indent and separate with spaces";
+
+fn date_refusal(token: &str) -> String {
+    format!(
+        "{} is a date to PyYAML — quote it to keep it as text",
+        py_repr(token)
+    )
+}
+
+/// Refuse, from the source text, what serde_yaml_ng would read differently
+/// from PyYAML without the visitor ever seeing it:
+///
+/// - tabs, which PyYAML's scanner refuses in most positions;
+/// - tags (`!!str no`, `!<…>`, `%TAG`), which serde_yaml_ng resolves out of
+///   sight of the visitor;
+/// - plain words YAML 1.2 reads as numbers and PyYAML as text (`0o0`, `1e3`,
+///   `-.0`): they reach the visitor as numbers with no text left to re-resolve;
+/// - words PyYAML reads as dates, which a scalar folded over lines hides.
+///
+/// It scans word by word outside quoted scalars, comments and block scalars.
+/// A `!` that opens a word inside a plain scalar (`wow !`) is refused too: that
+/// over-refuses, which is the safe direction.
+fn guard(text: &str) -> Result<(), String> {
+    if text.contains('\t') {
+        return Err(TABS.into());
+    }
+    let tag_refusal = |tag: &str| format!("YAML tags are not supported here: {}", py_repr(tag));
+    let mut quote: Option<char> = None;
+    let mut block: Option<usize> = None; // indentation of the line that opened one
+    for line in text.split('\n') {
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        let indent = line.len() - line.trim_start_matches(' ').len();
+        if let Some(opened) = block {
+            if line.trim().is_empty() || indent > opened {
+                continue;
+            }
+            block = None;
+        }
+        if quote.is_none() && line.starts_with("%TAG") {
+            return Err(tag_refusal("%TAG"));
+        }
+        let chars: Vec<char> = line.chars().collect();
+        let mut word = String::new();
+        let mut after_space = true; // a comment needs whitespace before its `#`
+        let mut i = 0;
+        while i < chars.len() {
+            let c = chars[i];
+            if let Some(q) = quote {
+                match (q, c) {
+                    ('\'', '\'') if chars.get(i + 1) == Some(&'\'') => i += 1,
+                    ('"', '\\') => i += 1,
+                    (q, c) if q == c => quote = None,
+                    _ => {}
+                }
+                i += 1;
+                continue;
+            }
+            if c == ' ' || "[]{},".contains(c) {
+                check_word(&word)?;
+                word.clear();
+                after_space = c == ' ';
+                i += 1;
+                continue;
+            }
+            if word.is_empty() {
+                match c {
+                    '\'' | '"' => {
+                        quote = Some(c);
+                        i += 1;
+                        continue;
+                    }
+                    '#' if after_space => break,
+                    '!' => {
+                        let rest: String = chars[i..].iter().collect();
+                        let tag = match rest.strip_prefix("!<") {
+                            Some(verbatim) => {
+                                let end = verbatim.find('>').map_or(rest.len(), |e| e + 3);
+                                rest[..end].to_string()
+                            }
+                            None => rest
+                                .split([' ', ',', '[', ']', '{', '}'])
+                                .next()
+                                .unwrap_or("")
+                                .to_string(),
+                        };
+                        return Err(tag_refusal(&tag));
+                    }
+                    '|' | '>' if is_block_header(&chars[i + 1..]) => {
+                        block = Some(indent);
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            word.push(c);
+            after_space = false;
+            i += 1;
+        }
+        check_word(&word)?;
+    }
+    Ok(())
+}
+
+/// The rest of a line after `|` or `>`: indentation and chomping indicators,
+/// then nothing but spaces or a comment.
+fn is_block_header(rest: &[char]) -> bool {
+    let rest: String = rest.iter().collect();
+    let body = rest.trim_start_matches(|c: char| c.is_ascii_digit() || c == '+' || c == '-');
+    body.trim().is_empty() || (body.starts_with(' ') && body.trim_start().starts_with('#'))
+}
+
+/// One plain word of the source, keys included (`1e3:`).
+fn check_word(word: &str) -> Result<(), String> {
+    let word = word.strip_suffix(':').unwrap_or(word);
+    if word.is_empty() || word.starts_with(['&', '*']) {
+        return Ok(());
+    }
+    if is_timestamp(word) {
+        return Err(date_refusal(word));
+    }
+    let serde_number = matches!(
+        serde_yaml_ng::from_str::<serde_yaml_ng::Value>(word),
+        Ok(serde_yaml_ng::Value::Number(_))
+    );
+    if serde_number && !is_int(word) && !is_float(word) {
+        return Err(format!(
+            "{} is a number to this port but text to PyYAML — quote it",
+            py_repr(word)
+        ));
+    }
+    Ok(())
 }
 
 /// What serde_yaml_ng reports, before PyYAML's rules are applied.
@@ -258,9 +392,7 @@ fn resolve_plain(text: &str) -> Result<Value, String> {
         return construct_int(text).map(|digits| number(&digits));
     }
     if is_timestamp(text) {
-        return Err(format!(
-            "{text} is a date to PyYAML — quote it to keep it as text"
-        ));
+        return Err(date_refusal(text));
     }
     if text == "=" || text == "<<" {
         return Err(format!("{text} is a YAML 1.1 special key — quote it"));
@@ -509,10 +641,102 @@ mod tests {
         assert_eq!(repr("# only a comment\n"), "None");
     }
 
+    fn refusal(text: &str) -> String {
+        load(text).unwrap_err()
+    }
+
+    #[test]
+    fn tags_are_refused_wherever_a_token_starts() {
+        for (text, tag) in [
+            ("a: !!str no", "'!!str'"),
+            ("a: [1, !x 2]", "'!x'"),
+            ("a: {!!str <<: {b: 1}}", "'!!str'"),
+            ("x: &a !!str no\nb: *a", "'!!str'"),
+            (
+                "a: !<tag:yaml.org,2002:str> no",
+                "'!<tag:yaml.org,2002:str>'",
+            ),
+            ("%TAG !e! tag:e.com,2000:\n---\na: 1", "'%TAG'"),
+            // Chosen over-refusal: a `!` opening a word inside a plain scalar.
+            ("a: wow !", "'!'"),
+        ] {
+            assert_eq!(
+                refusal(text),
+                format!("YAML tags are not supported here: {tag}"),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn bangs_inside_text_quotes_comments_and_blocks_are_not_tags() {
+        for text in [
+            "a: 'it ! no'",
+            "a: \"!!str\"",
+            "a: b # !!str",
+            "a: |\n  !!str\n  x\nb: 1",
+            "a: >-\n  !x\nb: 1",
+            "a: hello!",
+            "a: b!c",
+            "a: 'don''t !x'",
+            "a: \"q \\\" !x\"",
+        ] {
+            assert!(load(text).is_ok(), "{text}: {:?}", load(text));
+        }
+        // The guard takes `#` as a comment only after a space. Both parsers
+        // read `,#` as one too, and refuse the file; seeing a tag there can
+        // only over-refuse.
+        assert!(load("a: [b,#c, !!str d]").is_err());
+        // The block ends where indentation returns.
+        assert!(load("a: |\n  x\nb: !!str y").is_err());
+    }
+
+    #[test]
+    fn tabs_are_refused() {
+        for text in ["a:\tb", "a: b\t", "a: 'x\ty'", "a: |\n  \tx"] {
+            assert_eq!(
+                refusal(text),
+                "tab characters are not supported here — indent and separate with spaces"
+            );
+        }
+    }
+
+    #[test]
+    fn numbers_only_yaml_1_2_reads_are_refused() {
+        for spelling in [
+            "0o0", "0e0", "0.0e0", "-.0", "+.0", "0e+0", "1e3", "0o17", "+.5",
+        ] {
+            assert_eq!(
+                refusal(&format!("a: {spelling}")),
+                format!("'{spelling}' is a number to this port but text to PyYAML — quote it"),
+            );
+            assert!(load(&format!("a: '{spelling}'")).is_ok());
+        }
+        assert_eq!(
+            refusal("1e3: {}"),
+            "'1e3' is a number to this port but text to PyYAML — quote it"
+        );
+        for text in [
+            "a: 0",
+            "a: 1",
+            "a: 0x1F",
+            "a: 0.0e+0",
+            "a: 1_000",
+            "a: .5",
+            "a: -1",
+        ] {
+            assert!(load(text).is_ok(), "{text}");
+        }
+    }
+
     #[test]
     fn unreadable_forms_are_refused() {
         assert!(load("a: 2020-01-01").is_err());
         assert!(load("a: 2020-1-1 10:00:00").is_err());
+        assert_eq!(
+            refusal("a: [x, 2001-12-14\n  21:59:43.10]"),
+            "'2001-12-14' is a date to PyYAML — quote it to keep it as text"
+        );
         assert_eq!(
             repr("a: [2020-1-1, 2020-01-01x]"),
             "{'a': ['2020-1-1', '2020-01-01x']}"
