@@ -900,8 +900,11 @@ VALIDATE_CASES: dict[str, dict] = {
     "stock_exclusivity_violation_is_not_a_veto": {
         "changeset": cs(
             {"op": "add_tag", "tag": "topic:ml", "keys": ["DUPL0001"]},
-            {"op": "remove_tag", "tag": "status:read", "keys": ["DUPL0001"]},
+            {"op": "fill_field", "key": "DUPL0001", "field": "volume", "value": "2"},
         )
+    },
+    "removing_a_stock_exclusivity_violation": {
+        "changeset": cs({"op": "remove_tag", "tag": "status:read", "keys": ["DUPL0001"]})
     },
     "fail_exclusivity_on_merge": {
         "changeset": cs(
