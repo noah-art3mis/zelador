@@ -124,6 +124,18 @@ def validate_fake(tag_colors=REGISTRY_COLOURS) -> FakeZotero:
             tags=[{"tag": "status:to-read"}, {"tag": "status:read"}],
         ),
         make_item("TRSH0001", version=18, title="Trashed", deleted=True),
+        # Holds both a merge source and its target; a book whose publisher is
+        # stored empty, which set_item_type must not clear again.
+        make_item(
+            "HELD0001",
+            version=19,
+            item_type="book",
+            title="Holds both",
+            publisher="",
+            url="https://example.org",
+            tags=[{"tag": "AI", "type": 1}, {"tag": "topic:ai"}],
+            creators=[{"creatorType": "author", "firstName": "Ada", "lastName": "Byron"}],
+        ),
     ]
     collections = [
         make_collection("COLL0001", "Projects", version=3),
@@ -162,8 +174,63 @@ VALIDATE_CASES: dict[str, dict] = {
     "merge_tag": {
         "changeset": cs({"op": "merge_tag", "from": ["AI", "l'été"], "into": "topic:ai"})
     },
-    "merge_tag_into_held_tag": {
+    "merge_tag_alias_into_canonical": {
         "changeset": cs({"op": "merge_tag", "from": ["unread"], "into": "status:to-read"})
+    },
+    "merge_tag_into_held_tag": {
+        "changeset": cs({"op": "merge_tag", "from": ["AI"], "into": "topic:ai"})
+    },
+    "set_creators_same_creators_is_noop": {
+        "changeset": cs(
+            {
+                "op": "set_creators",
+                "key": "HELD0001",
+                "creators": [{"lastName": "Byron", "firstName": "Ada", "creatorType": "author"}],
+            }
+        )
+    },
+    "set_item_type_skips_empty_stale_fields": {
+        "changeset": cs({"op": "set_item_type", "key": "HELD0001", "itemType": "journalArticle"})
+    },
+    "compose_ops_on_one_collection": {
+        "changeset": cs(
+            {"op": "rename_collection", "collection": "COLL0002", "name": "X"},
+            {"op": "rename_collection", "collection": "COLL0002", "name": "Y"},
+            {"op": "rename_collection", "collection": "COLL0002", "name": "Y"},
+            {"op": "move_collection", "collection": "COLL0002", "parent": "COLL0001"},
+            {"op": "move_collection", "collection": "COLL0002", "parent": "COLL0001"},
+            {"op": "trash_collection", "collection": "COLL0002"},
+            {"op": "trash_collection", "collection": "COLL0002"},
+        )
+    },
+    # The cycle exists only in the working state the first move created.
+    "fail_cycle_through_an_earlier_move": {
+        "changeset": cs(
+            {"op": "move_collection", "collection": "COLL0002", "parent": "COLL0001"},
+            {"op": "move_collection", "collection": "COLL0001", "parent": "COLL0002"},
+        )
+    },
+    "fail_unknown_objects_everywhere": {
+        "changeset": cs(
+            {"op": "remove_tag", "tag": "keep-me", "keys": ["NOPE0001", "JOUR0001"]},
+            {"op": "set_creators", "key": "NOPE0002", "creators": [creator(name="x")]},
+            {"op": "set_item_type", "key": "NOPE0003", "itemType": "book"},
+            {"op": "add_to_collection", "collection": "COLL0001", "keys": ["NOPE0004"]},
+            {"op": "remove_from_collection", "collection": "COLL0001", "keys": ["NOPE0005"]},
+            {"op": "move_collection", "collection": "NOPE0006", "parent": None},
+            {"op": "clear_field", "key": "NOPE0007", "field": "title"},
+        )
+    },
+    "fail_create_item_tags_without_registry": {
+        "changeset": cs(
+            {
+                "op": "create_item",
+                "itemType": "book",
+                "fields": {"title": "t"},
+                "tags": ["topic:ai", "status:read"],
+            }
+        ),
+        "registry": None,
     },
     "add_tag": {
         "changeset": cs({"op": "add_tag", "tag": "topic:ml", "keys": ["JOUR0001", "JOUR0002"]})
