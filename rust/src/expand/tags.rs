@@ -73,8 +73,12 @@ impl Expander<'_, '_> {
             return;
         }
         let is_source = |t: &Value| tag_of(t).is_some_and(|name| sources.iter().any(|s| s == name));
-        let keys: Vec<String> = self.items.iter().map(|i| py_str(&i["key"])).collect();
-        for key in keys {
+        let walk: Vec<(String, Value)> = self
+            .items
+            .iter()
+            .map(|i| (py_str(&i["key"]), i["version"].clone()))
+            .collect();
+        for (key, version) in walk {
             let tags = self.item_tags(&key);
             if !tags.iter().any(is_source) {
                 continue;
@@ -84,7 +88,7 @@ impl Expander<'_, '_> {
                 new.push(tag_entry(&target));
             }
             let change = Change::new("tags", Value::Array(tags), Value::Array(new), HIGH);
-            self.apply_item(at, &key, "tags", change);
+            self.apply_item_pinned(at, &key, version, "tags", change);
         }
     }
 

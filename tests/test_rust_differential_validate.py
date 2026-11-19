@@ -155,6 +155,14 @@ def validate_fake(tag_colors=REGISTRY_COLOURS) -> FakeZotero:
     )
 
 
+def duplicated_key_fake() -> FakeZotero:
+    """The API listing one key twice, at two versions: merge_tag pins the
+    version of the entry it walks, its data from the last entry."""
+    fake = validate_fake()
+    fake.items.append(make_item("JOUR0001", version=50, tags=[{"tag": "AI"}, {"tag": "late"}]))
+    return fake
+
+
 def golden_fake() -> FakeZotero:
     from tests.test_golden_plan import library
 
@@ -179,6 +187,10 @@ VALIDATE_CASES: dict[str, dict] = {
     },
     "merge_tag_into_held_tag": {
         "changeset": cs({"op": "merge_tag", "from": ["AI"], "into": "topic:ai"})
+    },
+    "merge_tag_pins_the_walked_entry": {
+        "changeset": cs({"op": "merge_tag", "from": ["AI"], "into": "topic:ai"}),
+        "fake": duplicated_key_fake,
     },
     "set_creators_same_creators_is_noop": {
         "changeset": cs(

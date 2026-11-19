@@ -257,6 +257,20 @@ impl<'c, 't> Expander<'c, 't> {
     /// the new value into the item's working state under `field`.
     fn apply_item(&mut self, at: At, key: &str, field: &str, change: Change) {
         let version = self.items_by_key[key]["version"].clone();
+        self.apply_item_pinned(at, key, version, field, change);
+    }
+
+    /// `apply_item` pinned to a version the caller names: merge_tag pins the
+    /// listing entry it walks, which differs from `items_by_key` (the last
+    /// entry) when the API lists a key twice.
+    fn apply_item_pinned(
+        &mut self,
+        at: At,
+        key: &str,
+        version: Value,
+        field: &str,
+        change: Change,
+    ) {
         let new = change.new.clone();
         self.record(at, "item", key, version, change);
         self.item_state(key).insert(field.into(), new);
