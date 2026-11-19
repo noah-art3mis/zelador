@@ -8,10 +8,9 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use chrono::Utc;
 use serde_json::{Map, Value, json};
 
-use crate::client::ZoteroClient;
+use crate::client::{ItemsQuery, ZoteroClient};
 use crate::config::Error;
 use crate::pyjson::{dumps_indent, py_str};
 use crate::status::{sorted_glob, stem};
@@ -55,7 +54,7 @@ pub fn finding(
 
 /// `datetime.now(UTC).isoformat()` – the fraction is omitted when it is zero.
 fn now_iso() -> String {
-    let now = Utc::now();
+    let now = crate::clock::now();
     let base = now.format("%Y-%m-%dT%H:%M:%S");
     match now.timestamp_subsec_micros() {
         0 => format!("{base}+00:00"),
@@ -72,7 +71,13 @@ pub fn run_audit(
     style: &str,
 ) -> Result<Value, Error> {
     let library = Library {
-        items: client.all_items("data,bib", style)?,
+        items: client
+            .all_items(ItemsQuery {
+                include: "data,bib",
+                style,
+                ..Default::default()
+            })?
+            .unwrap_or_default(),
         collections: client.all_collections()?,
         tags: client.all_tags()?,
     };

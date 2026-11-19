@@ -1,13 +1,14 @@
 //! Session orientation – the local half of `zel status` (port of status.py,
 //! plus the read-only parts of backup.py and write/changelog.py it needs).
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
 
+use crate::backup::parse_line;
 use crate::config::{Config, Error, config_file, taxonomy_file};
 use crate::pyjson::py_str;
 
@@ -33,40 +34,19 @@ pub fn stem(path: &Path) -> String {
         .unwrap_or_default()
 }
 
-fn parse_line(path: &Path, raw: &str) -> Result<Value, Error> {
-    serde_json::from_str(raw).map_err(|e| Error::Config(format!("{}: {e}", path.display())))
-}
-
 // -- backups -------------------------------------------------------------------
 
 fn backup_part(backups_dir: &Path) -> Result<Value, Error> {
-    let Some(path) = sorted_glob(backups_dir, ".jsonl")?.pop() else {
+    let Some(info) = crate::backup::latest_backup(backups_dir)? else {
         return Ok(Value::Null);
     };
-    let text = fs::read_to_string(&path)?;
-    let mut lines = text.split_inclusive('\n');
-    let header = parse_line(&path, lines.next().unwrap_or(""))?;
-    let (mut items, mut collections) = (0, 0);
-    let mut tags = HashSet::new();
-    for raw in text.split_inclusive('\n') {
-        let line = parse_line(&path, raw)?;
-        match line["kind"].as_str() {
-            Some("item") => {
-                items += 1;
-                if let Some(list) = line["object"]["data"]["tags"].as_array() {
-                    tags.extend(list.iter().map(|t| t["tag"].to_string()));
-                }
-            }
-            Some("collection") => collections += 1,
-            _ => {}
-        }
-    }
+    let stats = crate::backup::backup_stats(&info.path)?;
     Ok(json!({
-        "timestamp": header["timestamp"],
-        "library_version": header["library_version"],
-        "items": items,
-        "collections": collections,
-        "tags": tags.len(),
+        "timestamp": info.timestamp,
+        "library_version": info.library_version,
+        "items": stats.items,
+        "collections": stats.collections,
+        "tags": stats.tags,
     }))
 }
 

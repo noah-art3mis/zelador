@@ -54,6 +54,7 @@ fn write(out: &mut String, value: &Value, indent: Option<usize>, level: usize) {
             out.push('}');
         }
         Value::String(s) => out.push_str(&quote(s)),
+        Value::Number(n) => out.push_str(&py_number(n)),
         other => out.push_str(&other.to_string()),
     }
 }
@@ -71,6 +72,70 @@ fn quote(s: &str) -> String {
     serde_json::to_string(s).expect("strings always serialise")
 }
 
+/// What Python prints for a JSON number after `json.loads`: integers keep every
+/// digit (Python's `json.loads` refuses past 4300; this does not), floats go
+/// through `repr`. Relies on
+/// serde_json's `arbitrary_precision`, which keeps the number's source text.
+pub fn py_number(number: &serde_json::Number) -> String {
+    let text = number.as_str();
+    if !text.contains(['.', 'e', 'E']) {
+        return if text == "-0" {
+            "0".into()
+        } else {
+            text.to_string()
+        };
+    }
+    float_repr(
+        text.parse::<f64>()
+            .expect("serde_json validated the number"),
+    )
+}
+
+/// Python's `repr(float)`: the shortest digits that round-trip, in fixed
+/// notation when the decimal exponent is in [-4, 16), else `d.ddde±XX`.
+fn float_repr(value: f64) -> String {
+    if value.is_infinite() {
+        return if value > 0.0 { "Infinity" } else { "-Infinity" }.into();
+    }
+    // `{:e}` finds how many digits the shortest round-trip form needs, but when
+    // two candidates of that length are equally close it rounds the tie up,
+    // where CPython rounds half to even. Re-render at that length with exact
+    // rounding, which lands on CPython's digits: "-1.5e-7", "1e16", "0e0".
+    let shortest = format!("{value:e}");
+    let length = shortest
+        .split('e')
+        .next()
+        .map_or(1, |m| m.chars().filter(char::is_ascii_digit).count());
+    let sci = format!("{:.*e}", length.saturating_sub(1), value);
+    let (mantissa, exponent) = sci.split_once('e').expect("{:e} always has an exponent");
+    let exponent: i32 = exponent.parse().expect("integer exponent");
+    let (sign, mantissa) = match mantissa.strip_prefix('-') {
+        Some(rest) => ("-", rest),
+        None => ("", mantissa),
+    };
+    let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
+    if !(-4..16).contains(&exponent) {
+        let (first, rest) = digits.split_at(1);
+        let fraction = if rest.is_empty() {
+            String::new()
+        } else {
+            format!(".{rest}")
+        };
+        let exp_sign = if exponent < 0 { '-' } else { '+' };
+        return format!("{sign}{first}{fraction}e{exp_sign}{:02}", exponent.abs());
+    }
+    let point = exponent + 1; // digits before the decimal point
+    let body = if point <= 0 {
+        format!("0.{}{digits}", "0".repeat((-point) as usize))
+    } else if point as usize >= digits.len() {
+        format!("{digits}{}.0", "0".repeat(point as usize - digits.len()))
+    } else {
+        let (whole, fraction) = digits.split_at(point as usize);
+        format!("{whole}.{fraction}")
+    };
+    format!("{sign}{body}")
+}
+
 /// What an f-string interpolation of a parsed JSON value prints.
 pub fn py_str(value: &Value) -> String {
     match value {
@@ -78,6 +143,12 @@ pub fn py_str(value: &Value) -> String {
         Value::Bool(true) => "True".into(),
         Value::Bool(false) => "False".into(),
         Value::Null => "None".into(),
+        // str(float("inf")) is "inf"; json.dumps writes "Infinity".
+        Value::Number(n) => match py_number(n).as_str() {
+            "Infinity" => "inf".into(),
+            "-Infinity" => "-inf".into(),
+            text => text.into(),
+        },
         other => other.to_string(),
     }
 }
@@ -175,6 +246,41 @@ mod tests {
             py_repr("tab\there\u{a0}\u{200b}"),
             "'tab\\there\\xa0\\u200b'"
         );
+    }
+
+    /// What `json.dumps(json.loads(text))` prints for each JSON number.
+    #[test]
+    fn numbers_reserialise_like_python() {
+        for (text, python) in [
+            ("0", "0"),
+            ("-0", "0"),
+            ("42", "42"),
+            ("123456789012345678901234", "123456789012345678901234"),
+            ("-9223372036854775809", "-9223372036854775809"),
+            ("1.0", "1.0"),
+            ("-0.0", "-0.0"),
+            ("1.5", "1.5"),
+            ("0.0001", "0.0001"),
+            ("0.00001", "1e-05"),
+            ("2.5e-5", "2.5e-05"),
+            ("1.5e-7", "1.5e-07"),
+            ("1e5", "100000.0"),
+            ("1E5", "100000.0"),
+            ("1e15", "1000000000000000.0"),
+            ("1e16", "1e+16"),
+            ("1.25e100", "1.25e+100"),
+            ("1e400", "Infinity"),
+            ("-1e400", "-Infinity"),
+            ("0.1", "0.1"),
+            ("123.456", "123.456"),
+            // Exact ties between two shortest candidates: CPython rounds half to even.
+            ("1125899906842624.25", "1125899906842624.2"),
+            ("-1113178120592002.25", "-1113178120592002.2"),
+            ("111659285584252.125", "111659285584252.12"),
+        ] {
+            let value: Value = serde_json::from_str(text).unwrap();
+            assert_eq!(dumps(&value), python, "{text}");
+        }
     }
 
     #[test]
