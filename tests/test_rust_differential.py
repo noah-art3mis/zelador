@@ -16,6 +16,7 @@ import os
 import shutil
 import subprocess
 import threading
+import time
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -48,11 +49,32 @@ CLOCK_MODULES = (
 )
 
 
+# A fixed non-UTC zone (POSIX form, no tz database needed), so a timestamp taken
+# in local time instead of UTC differs by three hours on every machine, CI included.
+TEST_TZ = "<-03>3"
+
+
+@pytest.fixture
+def test_tz():
+    """TEST_TZ for this test only. Set by hand, not with monkeypatch: tzset() must
+    run again after TZ is restored, or the zone outlives the test."""
+    saved = os.environ.get("TZ")
+    os.environ["TZ"] = TEST_TZ
+    time.tzset()
+    yield
+    if saved is None:
+        del os.environ["TZ"]
+    else:
+        os.environ["TZ"] = saved
+    time.tzset()
+
+
 def freeze_python_clock(monkeypatch, instant: datetime) -> None:
     class Frozen(datetime):
         @classmethod
         def now(cls, tz=None):
-            return instant if tz is not None else instant.replace(tzinfo=None)
+            # Naive now() is local wall time, as the real one is.
+            return instant if tz is not None else instant.astimezone().replace(tzinfo=None)
 
     for name in CLOCK_MODULES:
         monkeypatch.setattr(f"{name}.datetime", Frozen)
@@ -360,6 +382,7 @@ def run_rust(
         "ZELADOR_DATA_DIR": str(data),
         "ZELADOR_API_BASE": bridge.origin,
         "ZELADOR_NOW": instant.isoformat(),
+        "TZ": TEST_TZ,
         "ZELADOR_CONFIG_DIR": os.environ["ZELADOR_CONFIG_DIR"],  # conftest's per-test dir
         "ZOTERO_API_KEY": API_KEY,
         "ZOTERO_USER_ID": USER_ID,
@@ -401,11 +424,16 @@ CASES = [
     for scenario in sorted(SCENARIOS)
     for args in COMMANDS
     if not (scenario == "redirect_not_followed" and args[0] != "status")
+    # The scripted page answers the first request; only backup's is the item dump
+    # whose numbers reach the output.
+    and not (scenario == "foreign_number_text" and args[0] != "backup")
 ]
 
 
 @pytest.mark.parametrize(("scenario", "args"), CASES)
-def test_rust_matches_python(rust_bin, tmp_path, monkeypatch, isolated_config_dir, scenario, args):
+def test_rust_matches_python(
+    rust_bin, tmp_path, monkeypatch, isolated_config_dir, test_tz, scenario, args
+):
     py_data, rs_data = tmp_path / "py" / "data", tmp_path / "rs" / "data"
     seed_data_dir(py_data, strays=args[0] == "status")
     seed_data_dir(rs_data, strays=args[0] == "status")

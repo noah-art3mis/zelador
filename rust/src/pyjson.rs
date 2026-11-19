@@ -73,7 +73,8 @@ fn quote(s: &str) -> String {
 }
 
 /// What Python prints for a JSON number after `json.loads`: integers keep every
-/// digit (Python ints are unbounded), floats go through `repr`. Relies on
+/// digit (Python's `json.loads` refuses past 4300; this does not), floats go
+/// through `repr`. Relies on
 /// serde_json's `arbitrary_precision`, which keeps the number's source text.
 pub fn py_number(number: &serde_json::Number) -> String {
     let text = number.as_str();
@@ -96,8 +97,16 @@ fn float_repr(value: f64) -> String {
     if value.is_infinite() {
         return if value > 0.0 { "Infinity" } else { "-Infinity" }.into();
     }
-    // `{:e}` gives the shortest round-trip digits: "-1.5e-7", "1e16", "0e0".
-    let sci = format!("{value:e}");
+    // `{:e}` finds how many digits the shortest round-trip form needs, but when
+    // two candidates of that length are equally close it rounds the tie up,
+    // where CPython rounds half to even. Re-render at that length with exact
+    // rounding, which lands on CPython's digits: "-1.5e-7", "1e16", "0e0".
+    let shortest = format!("{value:e}");
+    let length = shortest
+        .split('e')
+        .next()
+        .map_or(1, |m| m.chars().filter(char::is_ascii_digit).count());
+    let sci = format!("{:.*e}", length.saturating_sub(1), value);
     let (mantissa, exponent) = sci.split_once('e').expect("{:e} always has an exponent");
     let exponent: i32 = exponent.parse().expect("integer exponent");
     let (sign, mantissa) = match mantissa.strip_prefix('-') {
@@ -134,7 +143,12 @@ pub fn py_str(value: &Value) -> String {
         Value::Bool(true) => "True".into(),
         Value::Bool(false) => "False".into(),
         Value::Null => "None".into(),
-        Value::Number(n) => py_number(n),
+        // str(float("inf")) is "inf"; json.dumps writes "Infinity".
+        Value::Number(n) => match py_number(n).as_str() {
+            "Infinity" => "inf".into(),
+            "-Infinity" => "-inf".into(),
+            text => text.into(),
+        },
         other => other.to_string(),
     }
 }
@@ -259,6 +273,10 @@ mod tests {
             ("-1e400", "-Infinity"),
             ("0.1", "0.1"),
             ("123.456", "123.456"),
+            // Exact ties between two shortest candidates: CPython rounds half to even.
+            ("1125899906842624.25", "1125899906842624.2"),
+            ("-1113178120592002.25", "-1113178120592002.2"),
+            ("111659285584252.125", "111659285584252.12"),
         ] {
             let value: Value = serde_json::from_str(text).unwrap();
             assert_eq!(dumps(&value), python, "{text}");
