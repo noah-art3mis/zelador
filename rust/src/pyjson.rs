@@ -149,7 +149,27 @@ pub fn py_str(value: &Value) -> String {
             "-Infinity" => "-inf".into(),
             text => text.into(),
         },
-        other => other.to_string(),
+        other => py_repr_value(other),
+    }
+}
+
+/// Python's `repr()` of what `json.loads` returns: dicts, lists, strings,
+/// numbers, `True`/`False` and `None`, nested – as error messages show a value.
+pub fn py_repr_value(value: &Value) -> String {
+    match value {
+        Value::String(s) => py_repr(s),
+        Value::Array(items) => {
+            let inner: Vec<String> = items.iter().map(py_repr_value).collect();
+            format!("[{}]", inner.join(", "))
+        }
+        Value::Object(map) => {
+            let inner: Vec<String> = map
+                .iter()
+                .map(|(k, v)| format!("{}: {}", py_repr(k), py_repr_value(v)))
+                .collect();
+            format!("{{{}}}", inner.join(", "))
+        }
+        scalar => py_str(scalar),
     }
 }
 
@@ -281,6 +301,42 @@ mod tests {
             let value: Value = serde_json::from_str(text).unwrap();
             assert_eq!(dumps(&value), python, "{text}");
         }
+    }
+
+    /// Literal outputs of `repr(json.loads(text))` from CPython 3.14.
+    #[test]
+    fn repr_value_matches_python_repr_of_parsed_json() {
+        for (text, python) in [
+            (r#"{"a": true, "b": null}"#, "{'a': True, 'b': None}"),
+            (
+                "[1, 2.5, -0, -0.0, 1e400, -1e400, 1E5, 0.00001, 123456789012345678901234]",
+                "[1, 2.5, 0, -0.0, inf, -inf, 100000.0, 1e-05, 123456789012345678901234]",
+            ),
+            (r#""rui's""#, r#""rui's""#),
+            (
+                r#"{"say \"hi\"": ["x", {"k": false}]}"#,
+                r#"{'say "hi"': ['x', {'k': False}]}"#,
+            ),
+            ("[]", "[]"),
+            ("{}", "{}"),
+            (r#"[[], {}, "\u00e9\t\u200b"]"#, r"[[], {}, 'é\t\u200b']"),
+            (r#""it's \"q\"""#, r#"'it\'s "q"'"#),
+            ("null", "None"),
+            ("true", "True"),
+            ("3", "3"),
+            ("1.0", "1.0"),
+        ] {
+            let value: Value = serde_json::from_str(text).unwrap();
+            assert_eq!(py_repr_value(&value), python, "{text}");
+        }
+    }
+
+    /// `str()` differs from `repr()` only for a top-level string.
+    #[test]
+    fn str_of_containers_is_their_repr() {
+        let value: Value = serde_json::from_str(r#"["rui's", {"a": null}]"#).unwrap();
+        assert_eq!(py_str(&value), r#"["rui's", {'a': None}]"#);
+        assert_eq!(py_str(&Value::String("rui's".into())), "rui's");
     }
 
     #[test]
