@@ -19,6 +19,6 @@ dotenvy = "0.15.7"
 indexmap = "2"
 reqwest = { version = "0.13.5", features = ["blocking", "query"] }
 serde = "1.0.229"
-serde_json = { version = "1.0.154", features = ["arbitrary_precision", "preserve_order"] }
+serde_json = { version = "1.0.154", features = ["arbitrary_precision", "preserve_order", "unbounded_depth"] }
 serde_yaml_ng = "0.10.0"
 unicode-general-category = "1.1.0"

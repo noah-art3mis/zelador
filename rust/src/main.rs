@@ -268,7 +268,23 @@ fn audit(
     Ok(())
 }
 
+/// The stack the CLI runs on. A changeset may nest `jsondecode::MAX_DEPTH`
+/// levels, and parsing, `repr`, serialising and dropping such a value all
+/// recurse; the platform main thread (8 MiB on Linux, 1 MiB on Windows) is not
+/// sized for that in a debug build.
+const STACK_BYTES: usize = 64 << 20;
+
 fn main() -> ExitCode {
+    std::thread::Builder::new()
+        .stack_size(STACK_BYTES)
+        .spawn(run)
+        .expect("spawning the CLI thread")
+        .join()
+        // A panic already printed its message; exit as an uncaught panic does.
+        .unwrap_or(ExitCode::from(101))
+}
+
+fn run() -> ExitCode {
     let cli = Cli::parse();
     let outcome = match cli.command {
         Command::Backup { as_json } => backup(cli.verbose, as_json),

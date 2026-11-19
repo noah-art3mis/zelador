@@ -6,6 +6,8 @@ and API requests. Harness in tests/rust_harness.py.
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -543,6 +545,14 @@ VALIDATE_CASES: dict[str, dict] = {
     "lint_not_json_bom": {"changeset": "﻿{}"},
     "lint_not_json_bad_literal": {"changeset": "[nul]"},
     "lint_not_json_number": {"changeset": "[-]"},
+    # The top object plus 999 arrays: 1000 levels, the port's limit, under a key
+    # validate ignores.
+    "deep_nesting_at_the_limit": {
+        "changeset": '{"schema": "changeset.v1", "slug": "deep", "note": '
+        + "[" * 999
+        + "]" * 999
+        + ', "intents": [{"op": "trash_item", "key": "JOUR0002"}]}'
+    },
     "lint_not_an_object": {"changeset": "[1, 2]"},
     "lint_schema_missing": {"changeset": {"slug": "x", "intents": []}},
     "lint_schema_wrong": {"changeset": {"schema": {"v": 1.0, "ok": True, "n": None}}},
@@ -787,3 +797,35 @@ def test_rust_validate_matches_python(
             files[1]["plans/20260719T120000Z-golden-sweep.json"]
             == (GOLDEN_DIR / "plan.json").read_text()
         )
+
+
+TOO_DEEP = {
+    # One level past the limit: refused with CPython-style position text.
+    "one_too_deep": (
+        '{"x": ' + "[" * 1000 + "]" * 1000 + "}",
+        "nesting deeper than 1000 levels: line 1 column 1006 (char 1005)",
+    ),
+    # Deep enough to overflow a naive recursive parser's stack.
+    "stack_buster": (
+        "[" * 300_000,
+        "nesting deeper than 1000 levels: line 1 column 1001 (char 1000)",
+    ),
+}
+
+
+@pytest.mark.parametrize("name", sorted(TOO_DEEP))
+def test_rust_refuses_deeper_nesting_cleanly(rust_bin, tmp_path, name):
+    """Past 1000 levels the port refuses the changeset as bad input. CPython goes
+    deeper, until its stack runs out (a RecursionError traceback), so this is a
+    Rust-only check: a clean exit 2, never a crash."""
+    text, reason = TOO_DEEP[name]
+    data = tmp_path / "data"
+    seed_backup(data, "20261101T120000Z")
+    write_changeset_file(data, name, text)
+    path = data / "changesets" / f"{name}.json"
+    env = {"PATH": os.environ["PATH"], "ZELADOR_DATA_DIR": str(data), "HOME": str(tmp_path)}
+    proc = subprocess.run(
+        [str(rust_bin), "validate", str(path)], env=env, capture_output=True, text=True, timeout=60
+    )
+    assert (proc.returncode, proc.stdout) == (2, "")
+    assert proc.stderr == f"error: {path} is not valid JSON: {reason}\n"

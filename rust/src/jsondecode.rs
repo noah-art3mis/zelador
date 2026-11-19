@@ -5,8 +5,18 @@
 //! (char 13)"), and serde_json words and positions its errors differently. This
 //! scanner walks the text the way CPython's C scanner (`_json.c`, 3.13+) does,
 //! only to find the first error; serde_json still builds the value.
+//!
+//! Nesting stops at [`MAX_DEPTH`] levels. CPython has no fixed limit – it goes
+//! until its C stack runs out (about 65,000 arrays deep on Linux) and then
+//! raises RecursionError – so deeper text is refused here as bad input, which
+//! also keeps every later recursive walk of the value well inside the stack.
 
+use serde::Deserialize;
 use serde_json::Value;
+
+/// The deepest nesting of arrays and objects a changeset may have.
+pub const MAX_DEPTH: usize = 1000;
+const TOO_DEEP: &str = "nesting deeper than 1000 levels";
 
 /// Parse JSON text, or return the message `str(JSONDecodeError)` would carry.
 ///
@@ -23,7 +33,7 @@ pub fn loads(text: &str) -> Result<Value, String> {
     }
     let scanner = Scanner { s: &chars };
     let start = scanner.skip_ws(0);
-    let end = match scanner.scan_once(start) {
+    let end = match scanner.scan_once(start, 0) {
         Ok(end) => scanner.skip_ws(end),
         Err(Fail::StopIteration(at)) => return Err(message(&chars, "Expecting value", at)),
         Err(Fail::Decode(msg, at)) => return Err(message(&chars, msg, at)),
@@ -31,7 +41,11 @@ pub fn loads(text: &str) -> Result<Value, String> {
     if end != chars.len() {
         return Err(message(&chars, "Extra data", end));
     }
-    serde_json::from_str(text).map_err(|e| e.to_string())
+    // serde_json stops at 128 levels by default; the scan above already
+    // bounded the depth.
+    let mut deserializer = serde_json::Deserializer::from_str(text);
+    deserializer.disable_recursion_limit();
+    Value::deserialize(&mut deserializer).map_err(|e| e.to_string())
 }
 
 /// `JSONDecodeError.__str__`: positions count characters, not bytes.
@@ -74,14 +88,16 @@ impl Scanner<'_> {
     }
 
     /// One value starting at `idx`; the index just past it.
-    fn scan_once(&self, idx: usize) -> Result<usize, Fail> {
+    /// `depth` counts the containers already open around `idx`.
+    fn scan_once(&self, idx: usize, depth: usize) -> Result<usize, Fail> {
         let Some(c) = self.at(idx) else {
             return Err(Fail::StopIteration(idx));
         };
         match c {
             '"' => return self.scan_string(idx + 1),
-            '{' => return self.parse_object(idx + 1),
-            '[' => return self.parse_array(idx + 1),
+            '{' | '[' if depth >= MAX_DEPTH => return Err(Fail::Decode(TOO_DEEP, idx)),
+            '{' => return self.parse_object(idx + 1, depth + 1),
+            '[' => return self.parse_array(idx + 1, depth + 1),
             _ => {}
         }
         for word in ["null", "true", "false", "NaN", "Infinity", "-Infinity"] {
@@ -193,7 +209,7 @@ impl Scanner<'_> {
         (idx..idx + 4).try_fold(0, |acc, i| Some(acc * 16 + self.at(i)?.to_digit(16)?))
     }
 
-    fn parse_object(&self, start: usize) -> Result<usize, Fail> {
+    fn parse_object(&self, start: usize, depth: usize) -> Result<usize, Fail> {
         let mut idx = self.skip_ws(start);
         if self.at(idx) == Some('}') {
             return Ok(idx + 1);
@@ -209,7 +225,7 @@ impl Scanner<'_> {
             if self.at(idx) != Some(':') {
                 return Err(Fail::Decode("Expecting ':' delimiter", idx));
             }
-            idx = self.skip_ws(self.scan_once(self.skip_ws(idx + 1))?);
+            idx = self.skip_ws(self.scan_once(self.skip_ws(idx + 1), depth)?);
             match self.at(idx) {
                 Some('}') => return Ok(idx + 1),
                 Some(',') => {}
@@ -226,13 +242,13 @@ impl Scanner<'_> {
         }
     }
 
-    fn parse_array(&self, start: usize) -> Result<usize, Fail> {
+    fn parse_array(&self, start: usize, depth: usize) -> Result<usize, Fail> {
         let mut idx = self.skip_ws(start);
         if self.at(idx) == Some(']') {
             return Ok(idx + 1);
         }
         loop {
-            idx = self.skip_ws(self.scan_once(idx)?);
+            idx = self.skip_ws(self.scan_once(idx, depth)?);
             match self.at(idx) {
                 Some(']') => return Ok(idx + 1),
                 Some(',') => {}
@@ -343,6 +359,27 @@ mod tests {
         ] {
             assert_eq!(loads(text).unwrap_err(), python, "{text:?}");
         }
+    }
+
+    /// Run on a stack sized like the CLI's (test threads get 2 MiB).
+    #[test]
+    fn nesting_stops_cleanly_at_the_limit() {
+        std::thread::Builder::new()
+            .stack_size(64 << 20)
+            .spawn(nesting_limit)
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    fn nesting_limit() {
+        let nested = |n: usize| format!("{}{}", "[".repeat(n), "]".repeat(n));
+        assert!(loads(&nested(MAX_DEPTH)).is_ok());
+        assert_eq!(
+            loads(&nested(MAX_DEPTH + 1)).unwrap_err(),
+            "nesting deeper than 1000 levels: line 1 column 1001 (char 1000)"
+        );
+        assert!(loads(&"[".repeat(300_000)).is_err());
     }
 
     #[test]
