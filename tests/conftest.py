@@ -11,6 +11,9 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 import pytest
 
+# The Rust differential harness's fixtures (rust_bin, test_tz).
+pytest_plugins = ["tests.rust_harness"]
+
 USER_ID = "11868292"
 REPO_ROOT = Path(__file__).resolve().parent.parent  # the shipped *.example templates, rust/
 
