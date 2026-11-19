@@ -164,7 +164,13 @@ pub fn load_changeset(reference: &str) -> Result<Changeset, Error> {
 
 /// `^[a-z0-9][a-z0-9-]*$` under `re.match`.
 fn is_slug(s: &str) -> bool {
-    let mut chars = re_dollar_body(s).chars();
+    is_kebab_word(re_dollar_body(s))
+}
+
+/// `[a-z0-9][a-z0-9-]*` matching the whole of `s`: slugs, and either side of
+/// a registry tag's colon.
+pub fn is_kebab_word(s: &str) -> bool {
+    let mut chars = s.chars();
     chars
         .next()
         .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())

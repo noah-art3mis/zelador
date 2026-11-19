@@ -428,8 +428,14 @@ mod tests {
     #[test]
     fn int_and_float_compare_exactly() {
         let parse = |t: &str| serde_json::from_str::<Value>(t).unwrap();
-        assert!(!py_eq(&parse("9007199254740993"), &parse("9007199254740992.0")));
-        assert!(py_eq(&parse("9007199254740992"), &parse("9007199254740992.0")));
+        assert!(!py_eq(
+            &parse("9007199254740993"),
+            &parse("9007199254740992.0")
+        ));
+        assert!(py_eq(
+            &parse("9007199254740992"),
+            &parse("9007199254740992.0")
+        ));
         assert!(py_eq(&parse("100000000000000000000"), &parse("1e20")));
         assert!(!py_eq(&parse("1"), &parse("1.5")));
         assert!(!py_eq(&parse("1"), &parse("1e400")));

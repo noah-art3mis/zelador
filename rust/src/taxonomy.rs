@@ -12,6 +12,7 @@ use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
 
 use crate::config::Error;
+use crate::contracts::is_kebab_word;
 use crate::pyjson::{py_repr, py_repr_value, py_str, py_truthy, re_dollar_body};
 use crate::pyyaml::{self, Py};
 
@@ -185,16 +186,9 @@ fn mapping<'a>(
 
 /// `^[a-z0-9][a-z0-9-]*:[a-z0-9][a-z0-9-]*$` under `re.match`.
 fn is_tag_name(tag: &str) -> bool {
-    let part = |s: &str| {
-        let mut chars = s.chars();
-        chars
-            .next()
-            .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
-            && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-    };
     re_dollar_body(tag)
         .split_once(':')
-        .is_some_and(|(family, value)| part(family) && part(value))
+        .is_some_and(|(family, value)| is_kebab_word(family) && is_kebab_word(value))
 }
 
 /// `^#[0-9A-Fa-f]{6}$` under `re.match`.
