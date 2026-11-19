@@ -10,10 +10,10 @@ use std::path::Path;
 
 use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
-use serde_yaml_ng::Value as Yaml;
 
 use crate::config::Error;
 use crate::pyjson::{py_repr, py_repr_value, py_str, py_truthy, re_dollar_body};
+use crate::pyyaml::{self, Py};
 
 /// Zotero renders coloured tags as tinted text in its selector, and this one is
 /// unreadable there whatever the palette says (Okabe-Ito yellow).
@@ -72,29 +72,6 @@ impl Taxonomy {
     }
 }
 
-/// A YAML node as Python sees what `yaml.safe_load` returns, in JSON terms.
-/// Mapping keys become their `str()`.
-fn to_json(node: &Yaml) -> Value {
-    match node {
-        Yaml::Null => Value::Null,
-        Yaml::Bool(b) => Value::Bool(*b),
-        Yaml::Number(n) => match (n.as_i64(), n.as_u64(), n.as_f64()) {
-            (Some(i), _, _) => json!(i),
-            (_, Some(u), _) => json!(u),
-            (_, _, Some(f)) => serde_json::Number::from_f64(f).map_or(Value::Null, Value::Number),
-            _ => Value::Null,
-        },
-        Yaml::String(s) => Value::String(s.clone()),
-        Yaml::Sequence(items) => Value::Array(items.iter().map(to_json).collect()),
-        Yaml::Mapping(map) => Value::Object(
-            map.iter()
-                .map(|(k, v)| (py_str(&to_json(k)), to_json(v)))
-                .collect(),
-        ),
-        Yaml::Tagged(tagged) => to_json(&tagged.value),
-    }
-}
-
 /// Parse and lint the registry file.
 pub fn load_taxonomy(path: &Path) -> Result<Taxonomy, Error> {
     let shown = path.display();
@@ -105,29 +82,24 @@ pub fn load_taxonomy(path: &Path) -> Result<Taxonomy, Error> {
         ));
     }
     let text = fs::read_to_string(path)?;
-    let raw: Yaml = if text.trim().is_empty() {
-        Yaml::Null
-    } else {
-        serde_yaml_ng::from_str(&text).map_err(|e| Error::Config(format!("{shown}: {e}")))?
-    };
-    let Some(Yaml::Mapping(families_raw)) = raw.get("families") else {
+    let raw = pyyaml::load(&text).map_err(|e| Error::Config(format!("{shown}: {e}")))?;
+    let Some(Py::Dict(families_raw)) = raw.get("families") else {
         return fail(format!(
             "{shown} must be a mapping with a 'families' mapping"
         ));
     };
-    let Some(Yaml::Sequence(tags_raw)) = raw.get("tags") else {
+    let Some(Py::List(tags_raw)) = raw.get("tags") else {
         return fail(format!("{shown} must declare a 'tags' list"));
     };
     let mut families = IndexMap::new();
-    for (name, spec) in families_raw {
-        let name_json = to_json(name);
-        let spec = to_json(spec);
+    for (name_json, spec) in families_raw {
+        let spec = spec.to_json();
         let spec = if py_truthy(&spec) {
             spec
         } else {
             Value::Object(Map::new())
         };
-        let what = format!("family {}", py_repr_value(&name_json));
+        let what = format!("family {}", py_repr_value(name_json));
         let spec = mapping(
             &spec,
             &what,
@@ -136,7 +108,7 @@ pub fn load_taxonomy(path: &Path) -> Result<Taxonomy, Error> {
         )?;
         let flag = |key: &str| spec.get(key).is_some_and(py_truthy);
         families.insert(
-            py_str(&name_json),
+            py_str(name_json),
             Family {
                 coloured: flag("coloured"),
                 exclusive: flag("exclusive"),
@@ -145,7 +117,7 @@ pub fn load_taxonomy(path: &Path) -> Result<Taxonomy, Error> {
     }
     let mut tags = Vec::new();
     for entry in tags_raw {
-        let entry = to_json(entry);
+        let entry = entry.to_json();
         let entry = mapping(
             &entry,
             "tag entry",

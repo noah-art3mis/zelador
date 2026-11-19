@@ -13,6 +13,7 @@ mod contracts;
 mod expand;
 mod jsondecode;
 mod pyjson;
+mod pyyaml;
 mod status;
 mod summary;
 mod taxonomy;

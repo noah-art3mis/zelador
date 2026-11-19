@@ -655,6 +655,21 @@ VALIDATE_CASES: dict[str, dict] = {
 TRIVIAL = cs({"op": "trash_item", "key": "JOUR0002"})
 FAMILIES = "families:\n  status: {coloured: true, exclusive: true}\n  topic: {}\n"
 
+VALIDATE_CASES["yaml11_exclusive_no"] = {
+    "changeset": cs({"op": "add_tag", "tag": "status:read", "keys": ["JOUR0002"]}),
+    "registry": "families:\n  status: {exclusive: no}\n"
+    + "tags:\n  - {tag: status:read}\n  - {tag: status:to-read}\n",
+}
+VALIDATE_CASES["yaml11_bool_aliases"] = {
+    "changeset": cs(
+        {"op": "add_tag", "tag": "no", "keys": ["JOUR0002"]},
+        {"op": "add_tag", "tag": "True", "keys": ["JOUR0002"]},
+        {"op": "add_tag", "tag": "False", "keys": ["JOUR0002"]},
+        {"op": "add_tag", "tag": "yes", "keys": ["JOUR0002"]},
+    ),
+    "registry": "families:\n  topic: {}\ntags:\n  - {tag: topic:ai, aliases: [yes, 'no', NO]}\n",
+}
+
 # Defective registries: validate stops before any request, exit 1, as audit does.
 REGISTRY_CASES = {
     "not_a_mapping": "- a\n- b\n",
@@ -689,6 +704,26 @@ REGISTRY_CASES = {
     "falsy_colour_is_uncoloured": FAMILIES + "tags:\n  - {tag: topic:ai, colour: ''}\n",
     "family_flags_truthy": "families:\n  status: {coloured: 1, exclusive: yes please}\n"
     + "  topic:\ntags:\n  - {tag: status:read, colour: '#009E73', description: 3}\n",
+    # PyYAML resolves YAML 1.1 plain scalars that serde_yaml_ng leaves as text.
+    "yaml11_coloured_no": "families:\n  status: {coloured: no}\n"
+    + "tags:\n  - {tag: status:read, colour: '#009E73'}\n",
+    "yaml11_on_off_and_quoted_no": "families:\n  status: {coloured: Off, exclusive: ON}\n"
+    + "  topic: {coloured: 'no'}\ntags:\n  - {tag: topic:ai, colour: '#009E73'}\n",
+    "yaml11_bool_family_name": "families:\n  on: {}\n  topic: {}\ntags:\n  - tag: on:x\n",
+    "yaml11_single_letters_are_text": "families:\n  status: {coloured: y, exclusive: n}\n"
+    + "tags:\n  - {tag: status:read, colour: '#009E73'}\n",
+    "yaml11_octal_family_name": "families:\n  010: {}\ntags:\n  - tag: 010:x\n",
+    "yaml11_underscore_zero_flag": "families:\n  status: {coloured: 0_0}\n"
+    + "tags:\n  - {tag: status:read, colour: '#009E73'}\n",
+    "yaml11_sexagesimal_tag": FAMILIES + "tags:\n  - tag: 1:30\n",
+    "yaml11_numbers_repr": "families:\n  status: [.inf, -.Inf, .5, 1_0.5, 1:30.5, 0x_1F, 0b1_0,"
+    + " 123456789012345678901234567890, ~, '']\ntags: []\n",
+    "merge_keys": "base: &flags {coloured: true, exclusive: true}\n"
+    + "extra: &desc {description: d, exclusive: false}\nfamilies:\n"
+    + "  status: {<<: *flags, description: s}\n  rating: {<<: [*desc, *flags]}\n"
+    + "  topic: {<<: *desc}\ntags:\n  - {tag: status:read, colour: '#009E73'}\n"
+    + "  - {tag: rating:fav, colour: '#CC79A7'}\n",
+    "merge_key_quoted_is_a_key": "families:\n  status: {'<<': {coloured: true}}\ntags: []\n",
 }
 for _name, _text in REGISTRY_CASES.items():
     VALIDATE_CASES[f"registry_{_name}"] = {"changeset": TRIVIAL, "registry": _text}
