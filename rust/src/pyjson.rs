@@ -149,8 +149,97 @@ pub fn py_str(value: &Value) -> String {
             "-Infinity" => "-inf".into(),
             text => text.into(),
         },
-        other => other.to_string(),
+        other => py_repr_value(other),
     }
+}
+
+/// Python's `repr()` of what `json.loads` returns: dicts, lists, strings,
+/// numbers, `True`/`False` and `None`, nested – as error messages show a value.
+pub fn py_repr_value(value: &Value) -> String {
+    match value {
+        Value::String(s) => py_repr(s),
+        Value::Array(items) => {
+            let inner: Vec<String> = items.iter().map(py_repr_value).collect();
+            format!("[{}]", inner.join(", "))
+        }
+        Value::Object(map) => {
+            let inner: Vec<String> = map
+                .iter()
+                .map(|(k, v)| format!("{}: {}", py_repr(k), py_repr_value(v)))
+                .collect();
+            format!("{{{}}}", inner.join(", "))
+        }
+        scalar => py_str(scalar),
+    }
+}
+
+/// Python's `==` on parsed JSON: dicts compare without regard to key order,
+/// numbers by exact value (`1 == 1.0`, but `2**53 + 1 != 2.0**53`), and
+/// `True`/`False` equal `1`/`0`.
+pub fn py_eq(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Array(x), Value::Array(y)) => {
+            x.len() == y.len() && x.iter().zip(y).all(|(p, q)| py_eq(p, q))
+        }
+        (Value::Object(x), Value::Object(y)) => {
+            x.len() == y.len() && x.iter().all(|(k, v)| y.get(k).is_some_and(|w| py_eq(v, w)))
+        }
+        (Value::Number(_) | Value::Bool(_), Value::Number(_) | Value::Bool(_)) => {
+            match (as_int(a), as_int(b)) {
+                (Some(x), Some(y)) => x == y,
+                (Some(int), None) => float_is_int(as_float(b), &int),
+                (None, Some(int)) => float_is_int(as_float(a), &int),
+                (None, None) => as_float(a) == as_float(b),
+            }
+        }
+        _ => a == b,
+    }
+}
+
+/// The integer text of an int or bool, normalised like `py_number`.
+fn as_int(value: &Value) -> Option<String> {
+    match value {
+        Value::Bool(b) => Some(if *b { "1" } else { "0" }.into()),
+        Value::Number(n) if !n.as_str().contains(['.', 'e', 'E']) => Some(py_number(n)),
+        _ => None,
+    }
+}
+
+/// `float == int` in Python: exact, so a float equals an int only when it is
+/// finite, whole, and its exact decimal value has the same digits.
+fn float_is_int(float: Option<f64>, int: &str) -> bool {
+    let Some(f) = float.filter(|f| f.is_finite() && f.fract() == 0.0) else {
+        return false;
+    };
+    let digits = format!("{f:.0}");
+    let digits = if digits == "-0" { "0".into() } else { digits };
+    digits == int
+}
+
+fn as_float(value: &Value) -> Option<f64> {
+    match value {
+        Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+        Value::Number(n) => n.as_str().parse().ok(),
+        _ => None,
+    }
+}
+
+/// Python truthiness of a parsed JSON value.
+pub fn py_truthy(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(b) => *b,
+        Value::Number(n) => n.as_str().parse::<f64>().is_ok_and(|f| f != 0.0),
+        Value::String(s) => !s.is_empty(),
+        Value::Array(items) => !items.is_empty(),
+        Value::Object(map) => !map.is_empty(),
+    }
+}
+
+/// The text a `re.match(r"^...$", s)` pattern must cover: Python's `$` also
+/// matches just before one trailing newline, so `"slug\n"` passes `^[a-z]+$`.
+pub fn re_dollar_body(s: &str) -> &str {
+    s.strip_suffix('\n').unwrap_or(s)
 }
 
 /// Python's `repr(str)`: prefer single quotes, switch to double quotes when the
@@ -281,6 +370,76 @@ mod tests {
             let value: Value = serde_json::from_str(text).unwrap();
             assert_eq!(dumps(&value), python, "{text}");
         }
+    }
+
+    /// Literal outputs of `repr(json.loads(text))` from CPython 3.14.
+    #[test]
+    fn repr_value_matches_python_repr_of_parsed_json() {
+        for (text, python) in [
+            (r#"{"a": true, "b": null}"#, "{'a': True, 'b': None}"),
+            (
+                "[1, 2.5, -0, -0.0, 1e400, -1e400, 1E5, 0.00001, 123456789012345678901234]",
+                "[1, 2.5, 0, -0.0, inf, -inf, 100000.0, 1e-05, 123456789012345678901234]",
+            ),
+            (r#""rui's""#, r#""rui's""#),
+            (
+                r#"{"say \"hi\"": ["x", {"k": false}]}"#,
+                r#"{'say "hi"': ['x', {'k': False}]}"#,
+            ),
+            ("[]", "[]"),
+            ("{}", "{}"),
+            (r#"[[], {}, "\u00e9\t\u200b"]"#, r"[[], {}, 'é\t\u200b']"),
+            (r#""it's \"q\"""#, r#"'it\'s "q"'"#),
+            ("null", "None"),
+            ("true", "True"),
+            ("3", "3"),
+            ("1.0", "1.0"),
+        ] {
+            let value: Value = serde_json::from_str(text).unwrap();
+            assert_eq!(py_repr_value(&value), python, "{text}");
+        }
+    }
+
+    /// `str()` differs from `repr()` only for a top-level string.
+    #[test]
+    fn str_of_containers_is_their_repr() {
+        let value: Value = serde_json::from_str(r#"["rui's", {"a": null}]"#).unwrap();
+        assert_eq!(py_str(&value), r#"["rui's", {'a': None}]"#);
+        assert_eq!(py_str(&Value::String("rui's".into())), "rui's");
+    }
+
+    #[test]
+    fn equality_follows_python() {
+        let parse = |t: &str| serde_json::from_str::<Value>(t).unwrap();
+        assert!(py_eq(
+            &parse(r#"{"a": 1, "b": [true]}"#),
+            &parse(r#"{"b": [1.0], "a": 1}"#)
+        ));
+        assert!(py_eq(&parse("-0"), &parse("0.0")));
+        assert!(!py_eq(
+            &parse(r#"[{"a": 1}]"#),
+            &parse(r#"[{"a": 1, "b": 2}]"#)
+        ));
+        assert!(!py_eq(&parse("null"), &parse("false")));
+        assert!(!py_eq(&parse(r#""1""#), &parse("1")));
+    }
+
+    /// Python compares an int with a float exactly, not through a lossy cast.
+    #[test]
+    fn int_and_float_compare_exactly() {
+        let parse = |t: &str| serde_json::from_str::<Value>(t).unwrap();
+        assert!(!py_eq(
+            &parse("9007199254740993"),
+            &parse("9007199254740992.0")
+        ));
+        assert!(py_eq(
+            &parse("9007199254740992"),
+            &parse("9007199254740992.0")
+        ));
+        assert!(py_eq(&parse("100000000000000000000"), &parse("1e20")));
+        assert!(!py_eq(&parse("1"), &parse("1.5")));
+        assert!(!py_eq(&parse("1"), &parse("1e400")));
+        assert!(py_eq(&parse("true"), &parse("1.0")));
     }
 
     #[test]

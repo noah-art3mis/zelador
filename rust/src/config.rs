@@ -5,18 +5,25 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use serde_json::Value;
+
+use crate::pyjson::{py_str, py_truthy};
+
 /// Operational failures exit 1, bad input exits 2 – the CLI's contract.
 #[derive(Debug)]
 pub enum Error {
     Config(String),
     Zotero(String),
     BadInput(String),
+    /// Already reported on stderr; exit with this code and print nothing more.
+    Exit(u8),
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::Config(m) | Error::Zotero(m) | Error::BadInput(m) => f.write_str(m),
+            Error::Exit(code) => write!(f, "exit {code}"),
         }
     }
 }
@@ -99,7 +106,7 @@ pub fn data_dir() -> PathBuf {
 
 /// pathlib's normalisation: drop `.` components and doubled or trailing
 /// slashes, keeping `.` itself when nothing else is left.
-fn normalise_dir(raw: &str) -> PathBuf {
+pub fn normalise_dir(raw: &str) -> PathBuf {
     let path: PathBuf = Path::new(raw)
         .components()
         .filter(|c| !matches!(c, std::path::Component::CurDir))
@@ -126,11 +133,12 @@ pub fn load_config(path: &Path) -> Result<Config, Error> {
         return Ok(defaults);
     }
     let text = fs::read_to_string(path)?;
-    let raw: serde_yaml_ng::Value = serde_yaml_ng::from_str(&text)
-        .map_err(|e| Error::Config(format!("{}: {e}", path.display())))?;
+    let raw = crate::pyyaml::load(&text)
+        .map_err(|e| Error::Config(format!("{}: {e}", path.display())))?
+        .to_json();
     let map = match raw {
-        raw if is_falsy(&raw) => return Ok(defaults),
-        serde_yaml_ng::Value::Mapping(map) => map,
+        raw if !py_truthy(&raw) => return Ok(defaults),
+        Value::Object(map) => map,
         _ => {
             return Err(Error::Config(format!(
                 "{} must be a YAML mapping",
@@ -139,10 +147,10 @@ pub fn load_config(path: &Path) -> Result<Config, Error> {
         }
     };
     let allowed = ["zotero_data_dir", "citekey_sources", "style"];
-    let mut unknown: Vec<String> = map
+    let mut unknown: Vec<&str> = map
         .keys()
-        .map(yaml_str)
-        .filter(|k| !allowed.contains(&k.as_str()))
+        .map(String::as_str)
+        .filter(|k| !allowed.contains(k))
         .collect();
     if !unknown.is_empty() {
         unknown.sort();
@@ -153,48 +161,25 @@ pub fn load_config(path: &Path) -> Result<Config, Error> {
         )));
     }
     let citekey_sources = match map.get("citekey_sources") {
-        None => vec![],
-        Some(value) if is_falsy(value) => vec![],
-        Some(serde_yaml_ng::Value::Sequence(seq)) => seq.iter().map(yaml_str).collect(),
-        Some(_) => {
-            return Err(Error::Config(format!(
-                "citekey_sources in {} must be a list of paths/globs",
-                path.display()
-            )));
-        }
+        Some(value) if py_truthy(value) => match value {
+            Value::Array(items) => items.iter().map(py_str).collect(),
+            _ => {
+                return Err(Error::Config(format!(
+                    "citekey_sources in {} must be a list of paths/globs",
+                    path.display()
+                )));
+            }
+        },
+        _ => vec![],
     };
     let style = map
         .get("style")
-        .filter(|v| !is_falsy(v))
-        .map(yaml_str)
-        .unwrap_or_else(|| "apa".into());
+        .filter(|v| py_truthy(v))
+        .map_or_else(|| "apa".into(), py_str);
     Ok(Config {
         citekey_sources,
         style,
     })
-}
-
-/// Python truthiness of a parsed YAML value (`raw or {}`, `sources or []`).
-fn is_falsy(value: &serde_yaml_ng::Value) -> bool {
-    use serde_yaml_ng::Value as Y;
-    match value {
-        Y::Null => true,
-        Y::Bool(b) => !b,
-        Y::Number(n) => n.as_f64() == Some(0.0),
-        Y::String(s) => s.is_empty(),
-        Y::Sequence(seq) => seq.is_empty(),
-        Y::Mapping(map) => map.is_empty(),
-        _ => false,
-    }
-}
-
-fn yaml_str(value: &serde_yaml_ng::Value) -> String {
-    match value {
-        serde_yaml_ng::Value::String(s) => s.clone(),
-        serde_yaml_ng::Value::Number(n) => n.to_string(),
-        serde_yaml_ng::Value::Bool(b) => if *b { "True" } else { "False" }.into(),
-        _ => String::new(),
-    }
 }
 
 #[cfg(test)]
@@ -236,6 +221,22 @@ mod tests {
             );
         }
         assert_eq!(load("style: chicago\n").unwrap().style, "chicago");
+    }
+
+    /// PyYAML reads plain `no` as False (so the default style) and applies
+    /// merge keys; quoted 'no' stays text.
+    #[test]
+    fn yaml_1_1_scalars_and_merge_keys_read_like_pyyaml() {
+        assert_eq!(load("style: no\n").unwrap().style, "apa");
+        assert_eq!(load("style: 'no'\n").unwrap().style, "no");
+        assert_eq!(load("style: 0_0\n").unwrap().style, "apa");
+        let cfg = load("base: &b {style: mla}\n").err().unwrap().to_string();
+        assert!(cfg.contains("unknown config key(s)"), "{cfg}");
+        assert!(load("<<: {style: mla}\n").is_ok_and(|c| c.style == "mla"));
+        // What the loader cannot read as PyYAML does is refused, not guessed.
+        for text in ["style: !!str no\n", "style:\tmla\n", "style: 0o0\n"] {
+            assert!(load(text).is_err(), "{text:?}");
+        }
     }
 
     #[test]

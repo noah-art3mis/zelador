@@ -1,15 +1,22 @@
-//! zel – Rust spike of zelador's read-only path (issue #47).
+//! zel – partial Rust port of zelador (SPEC.md, M6).
 //!
-//! Ports `zel status` and `zel audit tags|collections`. Behaviour is pinned to
-//! the Python CLI by tests/test_rust_differential.py; see rust/README.md.
+//! Ports `zel status`, `zel backup`, `zel validate` and `zel audit
+//! tags|collections`. Behaviour is pinned to the Python CLI by
+//! tests/test_rust_differential.py; see rust/README.md.
 
 mod audit;
 mod backup;
 mod client;
 mod clock;
 mod config;
+mod contracts;
+mod expand;
+mod jsondecode;
 mod pyjson;
+mod pyyaml;
 mod status;
+mod summary;
+mod taxonomy;
 
 use std::env;
 use std::process::ExitCode;
@@ -45,6 +52,14 @@ enum Command {
     /// One-screen session orientation – the skills' mandatory opener.
     Status {
         /// One status object.
+        #[arg(long = "json")]
+        as_json: bool,
+    },
+    /// Check a changeset against taxonomy + hard rules; expand into a version-pinned plan.
+    Validate {
+        /// Path to a changeset.v1 JSON file.
+        changeset: String,
+        /// Final outcome object.
         #[arg(long = "json")]
         as_json: bool,
     },
@@ -148,6 +163,70 @@ fn status(verbose: bool, as_json: bool) -> Result<(), Error> {
     Ok(())
 }
 
+/// The registry, when the config dir has one; a defective file is an error.
+fn registry() -> Result<Option<taxonomy::Taxonomy>, Error> {
+    let path = config::taxonomy_file();
+    if !path.exists() {
+        return Ok(None);
+    }
+    taxonomy::load_taxonomy(&path).map(Some)
+}
+
+fn validate(verbose: bool, changeset: &str, as_json: bool) -> Result<(), Error> {
+    let parsed = contracts::load_changeset(changeset)?;
+    let Some(info) = backup::latest_backup(&config::ensure_dir("backups")?)? else {
+        return Err(Error::Config(
+            "no backup exists — run `zel backup` first".into(),
+        ));
+    };
+    let registry = registry()?;
+    let mut client = make_client(verbose)?;
+    let outcome = expand::expand(
+        &parsed,
+        &mut client,
+        registry.as_ref(),
+        info.timestamp,
+        clock::now(),
+        expand::keygen(),
+    )?;
+    let plan = match outcome {
+        Ok(plan) => plan,
+        Err(failures) => {
+            for failure in &failures {
+                eprintln!("invalid: {failure}");
+            }
+            if as_json {
+                println!(
+                    "{}",
+                    pyjson::dumps(&json!({"valid": false, "failures": failures}))
+                );
+            }
+            return Err(Error::Exit(2));
+        }
+    };
+    let path = contracts::save_plan(&plan, &config::ensure_dir("plans")?)?;
+    if as_json {
+        println!(
+            "{}",
+            pyjson::dumps(&json!({
+                "valid": true,
+                "plan": plan.id,
+                "path": path.to_string_lossy(),
+                "operations": plan.operations.len(),
+                "groups": plan.intents.len(),
+                "settings": plan.settings.is_some(),
+                "library_version": plan.library_version,
+            }))
+        );
+    } else {
+        for line in summary::summarize(&plan) {
+            println!("{line}");
+        }
+        println!("plan written: {}", path.display());
+    }
+    Ok(())
+}
+
 fn audit(
     verbose: bool,
     check: Option<String>,
@@ -155,6 +234,9 @@ fn audit(
     as_json: bool,
 ) -> Result<(), Error> {
     let cfg = config::load_config(&config::config_file())?;
+    // Loaded only to refuse a defective registry, as Python does before any
+    // check runs; the registry check itself is not ported.
+    registry()?;
     let check = match check.as_deref() {
         Some(name) if audit::PORTED_CHECKS.contains(&name) => name.to_string(),
         other => {
@@ -186,11 +268,28 @@ fn audit(
     Ok(())
 }
 
+/// The stack the CLI runs on. A changeset may nest `jsondecode::MAX_DEPTH`
+/// levels, and parsing, `repr`, serialising and dropping such a value all
+/// recurse; the platform main thread (8 MiB on Linux, 1 MiB on Windows) is not
+/// sized for that in a debug build.
+const STACK_BYTES: usize = 64 << 20;
+
 fn main() -> ExitCode {
+    std::thread::Builder::new()
+        .stack_size(STACK_BYTES)
+        .spawn(run)
+        .expect("spawning the CLI thread")
+        .join()
+        // A panic already printed its message; exit as an uncaught panic does.
+        .unwrap_or(ExitCode::from(101))
+}
+
+fn run() -> ExitCode {
     let cli = Cli::parse();
     let outcome = match cli.command {
         Command::Backup { as_json } => backup(cli.verbose, as_json),
         Command::Status { as_json } => status(cli.verbose, as_json),
+        Command::Validate { changeset, as_json } => validate(cli.verbose, &changeset, as_json),
         Command::Audit {
             check,
             since,
@@ -199,6 +298,7 @@ fn main() -> ExitCode {
     };
     match outcome {
         Ok(()) => ExitCode::SUCCESS,
+        Err(Error::Exit(code)) => ExitCode::from(code),
         Err(err @ Error::BadInput(_)) => {
             eprintln!("error: {err}");
             ExitCode::from(2)
