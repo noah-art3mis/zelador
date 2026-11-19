@@ -262,7 +262,7 @@ Skills encode the safety flow so it is followed by construction, not memory.
   - **R1 (done)** — config location: move `.env`, `config.yaml` and `taxonomy.yaml` out of the checkout into the platform config directory, in Python first, because a binary has no checkout to find them in.
   - **R2** — write path, in four parts. `tests/golden/` stays the shared contract, and a session log written by either implementation must be undoable by the other.
     - **R2a (done)** — `zel backup`, first, because every plan pins itself to a backup and restore reads objects back out of it: the file must be byte-identical.
-    - **R2b** — contracts, the taxonomy registry, and `zel validate` (expand into a version-pinned plan).
+    - **R2b (done)** — contracts, the taxonomy registry, and `zel validate` (expand into a version-pinned plan).
     - **R2c** — `zel apply`, the session log and the client's batch writes.
     - **R2d** — `zel undo`, `zel debug reconcile`, `zel debug restore`.
   - **R3** — remaining reads: `items`, `tags`, `collections`, the other audit checks, `lookup`, and `local` (on `rusqlite`).
