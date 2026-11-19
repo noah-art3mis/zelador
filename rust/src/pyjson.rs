@@ -174,7 +174,8 @@ pub fn py_repr_value(value: &Value) -> String {
 }
 
 /// Python's `==` on parsed JSON: dicts compare without regard to key order,
-/// numbers by value (`1 == 1.0`), and `True`/`False` equal `1`/`0`.
+/// numbers by exact value (`1 == 1.0`, but `2**53 + 1 != 2.0**53`), and
+/// `True`/`False` equal `1`/`0`.
 pub fn py_eq(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Array(x), Value::Array(y)) => {
@@ -186,7 +187,9 @@ pub fn py_eq(a: &Value, b: &Value) -> bool {
         (Value::Number(_) | Value::Bool(_), Value::Number(_) | Value::Bool(_)) => {
             match (as_int(a), as_int(b)) {
                 (Some(x), Some(y)) => x == y,
-                _ => as_float(a) == as_float(b),
+                (Some(int), None) => float_is_int(as_float(b), &int),
+                (None, Some(int)) => float_is_int(as_float(a), &int),
+                (None, None) => as_float(a) == as_float(b),
             }
         }
         _ => a == b,
@@ -200,6 +203,17 @@ fn as_int(value: &Value) -> Option<String> {
         Value::Number(n) if !n.as_str().contains(['.', 'e', 'E']) => Some(py_number(n)),
         _ => None,
     }
+}
+
+/// `float == int` in Python: exact, so a float equals an int only when it is
+/// finite, whole, and its exact decimal value has the same digits.
+fn float_is_int(float: Option<f64>, int: &str) -> bool {
+    let Some(f) = float.filter(|f| f.is_finite() && f.fract() == 0.0) else {
+        return false;
+    };
+    let digits = format!("{f:.0}");
+    let digits = if digits == "-0" { "0".into() } else { digits };
+    digits == int
 }
 
 fn as_float(value: &Value) -> Option<f64> {
@@ -408,6 +422,18 @@ mod tests {
         ));
         assert!(!py_eq(&parse("null"), &parse("false")));
         assert!(!py_eq(&parse(r#""1""#), &parse("1")));
+    }
+
+    /// Python compares an int with a float exactly, not through a lossy cast.
+    #[test]
+    fn int_and_float_compare_exactly() {
+        let parse = |t: &str| serde_json::from_str::<Value>(t).unwrap();
+        assert!(!py_eq(&parse("9007199254740993"), &parse("9007199254740992.0")));
+        assert!(py_eq(&parse("9007199254740992"), &parse("9007199254740992.0")));
+        assert!(py_eq(&parse("100000000000000000000"), &parse("1e20")));
+        assert!(!py_eq(&parse("1"), &parse("1.5")));
+        assert!(!py_eq(&parse("1"), &parse("1e400")));
+        assert!(py_eq(&parse("true"), &parse("1.0")));
     }
 
     #[test]
