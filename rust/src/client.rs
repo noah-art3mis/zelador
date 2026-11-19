@@ -62,6 +62,23 @@ pub struct ItemsQuery<'a> {
     pub if_modified_since: Option<String>,
 }
 
+/// The item-type schema endpoints the client caches per session.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum Schema {
+    Fields,
+    CreatorTypes,
+}
+
+impl Schema {
+    /// The endpoint, and the name each of its entries carries.
+    fn endpoint(self) -> (&'static str, &'static str) {
+        match self {
+            Schema::Fields => ("/itemTypeFields", "field"),
+            Schema::CreatorTypes => ("/itemTypeCreatorTypes", "creatorType"),
+        }
+    }
+}
+
 pub struct ZoteroClient {
     http: Http,
     base: String,
@@ -69,8 +86,7 @@ pub struct ZoteroClient {
     prefix: String,
     trace: bool,
     pending_backoff: f64,
-    field_cache: HashMap<String, HashSet<String>>,
-    creator_cache: HashMap<String, HashSet<String>>,
+    schema_cache: HashMap<(Schema, String), HashSet<String>>,
     pub last_modified_version: Option<i64>,
 }
 
@@ -96,8 +112,7 @@ impl ZoteroClient {
             prefix: format!("/users/{}", creds.user_id),
             trace,
             pending_backoff: 0.0,
-            field_cache: HashMap::new(),
-            creator_cache: HashMap::new(),
+            schema_cache: HashMap::new(),
             last_modified_version: None,
         })
     }
@@ -303,30 +318,22 @@ impl ZoteroClient {
 
     /// Valid data fields for an item type (/itemTypeFields), cached per session.
     pub fn item_type_fields(&mut self, item_type: &str) -> Result<HashSet<String>, Error> {
-        self.schema_set("/itemTypeFields", "field", item_type)
+        self.schema_set(Schema::Fields, item_type)
     }
 
     /// Valid creator types for an item type (/itemTypeCreatorTypes), cached per session.
     pub fn item_type_creator_types(&mut self, item_type: &str) -> Result<HashSet<String>, Error> {
-        self.schema_set("/itemTypeCreatorTypes", "creatorType", item_type)
+        self.schema_set(Schema::CreatorTypes, item_type)
     }
 
     /// One schema endpoint's names for an item type; a failed lookup is not
     /// cached, so asking again asks the server again, as in Python.
-    fn schema_set(
-        &mut self,
-        path: &str,
-        name: &str,
-        item_type: &str,
-    ) -> Result<HashSet<String>, Error> {
-        let cache = if name == "field" {
-            &self.field_cache
-        } else {
-            &self.creator_cache
-        };
-        if let Some(found) = cache.get(item_type) {
+    fn schema_set(&mut self, schema: Schema, item_type: &str) -> Result<HashSet<String>, Error> {
+        let cache_key = (schema, item_type.to_string());
+        if let Some(found) = self.schema_cache.get(&cache_key) {
             return Ok(found.clone());
         }
+        let (path, name) = schema.endpoint();
         let reply = self.get(path, &vec![("itemType".into(), item_type.into())])?;
         let entries: Vec<Value> = serde_json::from_str(&reply.body).map_err(|e| {
             Error::Zotero(self.redact(&format!("GET {path} returned invalid JSON: {e}")))
@@ -335,12 +342,7 @@ impl ZoteroClient {
             .iter()
             .filter_map(|entry| entry[name].as_str().map(String::from))
             .collect();
-        let cache = if name == "field" {
-            &mut self.field_cache
-        } else {
-            &mut self.creator_cache
-        };
-        cache.insert(item_type.to_string(), names.clone());
+        self.schema_cache.insert(cache_key, names.clone());
         Ok(names)
     }
 
